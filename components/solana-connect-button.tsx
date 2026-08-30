@@ -7,9 +7,10 @@ import { ChevronDown, Wallet } from "lucide-react";
 import { shortenAddress } from "@/lib/solana";
 
 /**
- * Win98-styled Solana wallet connect control for the system tray. Reads only
- * the public key; connect/disconnect/select are wallet-adapter-react methods
- * that hand off entirely to the browser extension.
+ * Win98-styled Solana wallet connect control. Selecting a wallet from the
+ * dropdown sets a `pendingConnect` flag; a useEffect then calls `connect()`
+ * only AFTER the selection has propagated to `wallet` — this avoids the
+ * classic `WalletNotSelectedError` race (connect before select settles).
  */
 export function SolanaConnectButton() {
   const {
@@ -21,9 +22,11 @@ export function SolanaConnectButton() {
     select,
     connect,
     disconnect,
+    wallet,
   } = useWallet();
 
   const [open, setOpen] = useState(false);
+  const [pendingConnect, setPendingConnect] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -36,6 +39,14 @@ export function SolanaConnectButton() {
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
+
+  // Connect only after the selected wallet has propagated to `wallet`.
+  useEffect(() => {
+    if (pendingConnect && wallet && !connected) {
+      setPendingConnect(false);
+      connect().catch(() => {});
+    }
+  }, [pendingConnect, wallet, connected, connect]);
 
   const label = connected && publicKey ? shortenAddress(publicKey.toBase58()) : "Connect Wallet";
 
@@ -72,9 +83,9 @@ export function SolanaConnectButton() {
               type="button"
               className="win98-menu-item w-full text-left"
               onClick={() => {
-                select(w.adapter.name);
-                connect().catch(() => {});
                 setOpen(false);
+                setPendingConnect(true);
+                select(w.adapter.name);
               }}
             >
               <Wallet size={14} />

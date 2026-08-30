@@ -19,12 +19,12 @@ export interface TxOutcome {
  * "awaiting signature" to "processing/confirming".
  */
 export function useSendSolTransfer() {
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, connected } = useWallet();
   const { connection } = useConnection();
 
   return useCallback(
     async (amountSol: number, onSigned?: (signature: string) => void): Promise<string> => {
-      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+      if (!connected || !publicKey) throw new Error("Wallet not connected");
 
       const tx = buildBuyTransaction(publicKey, amountSol);
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
@@ -55,12 +55,12 @@ export function useSendSolTransfer() {
  * outcome `simulated: true` so the UI can say so.
  */
 export function useBurnPixel98() {
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, connected } = useWallet();
   const { connection } = useConnection();
 
   return useCallback(
     async (amountTokens: number, onSigned?: (signature: string) => void): Promise<TxOutcome> => {
-      if (!publicKey || !sendTransaction) throw new Error("Wallet not connected");
+      if (!connected || !publicKey) throw new Error("Wallet not connected");
 
       if (!PIXEL98_MINT) {
         // $PIXEL98 not live yet — simulated burn, clearly flagged.
