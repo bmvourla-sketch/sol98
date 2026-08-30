@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" shape-rendering="crispEdges">
+  <!-- Win98 teal desktop tile -->
+  <rect width="128" height="128" fill="#008080"/>
+
+  <!-- beveled app window frame -->
+  <rect x="12" y="16" width="104" height="96" fill="#c0c0c0"/>
+  <rect x="12" y="16" width="104" height="96" fill="none" stroke="#dfdfdf" stroke-width="3"/>
+  <rect x="14" y="18" width="100" height="92" fill="none" stroke="#808080" stroke-width="2"/>
+
+  <!-- title bar -->
+  <rect x="14" y="18" width="100" height="16" fill="#000080"/>
+
+  <!-- pixel board grid -->
+  <g fill="#008080">
+    <rect x="24" y="44" width="6" height="6"/><rect x="32" y="44" width="6" height="6"/>
+    <rect x="40" y="44" width="6" height="6"/><rect x="48" y="44" width="6" height="6"/>
+    <rect x="56" y="44" width="6" height="6"/><rect x="64" y="44" width="6" height="6"/>
+    <rect x="24" y="52" width="6" height="6"/><rect x="40" y="52" width="6" height="6"/>
+    <rect x="56" y="52" width="6" height="6"/><rect x="72" y="52" width="6" height="6"/>
+    <rect x="32" y="60" width="6" height="6"/><rect x="48" y="60" width="6" height="6"/>
+    <rect x="64" y="60" width="6" height="6"/><rect x="80" y="60" width="6" height="6"/>
+    <rect x="40" y="68" width="6" height="6"/><rect x="56" y="68" width="6" height="6"/>
+    <rect x="72" y="68" width="6" height="6"/>
+  </g>
+  <g fill="#ffff00">
+    <rect x="24" y="52" width="6" height="6"/><rect x="64" y="52" width="6" height="6"/>
+    <rect x="48" y="60" width="6" height="6"/><rect x="72" y="60" width="6" height="6"/>
+  </g>
+  <g fill="#ff00ff">
+    <rect x="56" y="60" width="6" height="6"/><rect x="40" y="68" width="6" height="6"/>
+  </g>
+
+  <!-- SOL-98 label -->
+  <text x="64" y="96" font-family="Tahoma, 'Courier New', monospace" font-size="18" font-weight="bold" fill="#000080" text-anchor="middle">SOL-98</text>
+</svg>

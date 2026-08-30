@@ -1,0 +1,423 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   SOL-98 — Windows 98 retro UI stylesheet
+   ----------------------------------------------------------------------------
+   The whole app leans on a handful of reusable "bevel" primitives to fake the
+   classic grey 3D chrome: a raised edge (light top/left, dark bottom/right)
+   for buttons/windows, and a sunken edge (dark top/left, light bottom/right)
+   for wells, inputs and the pixel board.
+   ========================================================================== */
+
+:root {
+  --win98-teal: #008080;
+  --win98-silver: #c0c0c0;
+  --win98-navy: #000080;
+  --win98-light: #dfdfdf;
+  --win98-dark: #808080;
+  --win98-darker: #404040;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--win98-teal);
+  color: #000;
+  font-family: Tahoma, "MS Sans Serif", "Segoe UI", sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+  -webkit-font-smoothing: none;
+  user-select: none;
+}
+
+/* Crisp pixel rendering for the board and icons. */
+.pixelated {
+  image-rendering: pixelated;
+}
+
+/* ---------------------------------------------------------------------------
+   Bevel primitives. The raised/sunken look is exactly the Win98 border trick:
+   two light edges and two dark edges.
+   --------------------------------------------------------------------------- */
+.bevel-out {
+  border: 2px solid;
+  border-color: var(--win98-light) var(--win98-dark) var(--win98-dark) var(--win98-light);
+}
+
+.bevel-in {
+  border: 2px solid;
+  border-color: var(--win98-dark) var(--win98-light) var(--win98-light) var(--win98-dark);
+}
+
+/* Thin 1px variants for small elements (pixel cells, tray chips). */
+.bevel-out-1 {
+  border: 1px solid;
+  border-color: var(--win98-light) var(--win98-dark) var(--win98-dark) var(--win98-light);
+}
+
+.bevel-in-1 {
+  border: 1px solid;
+  border-color: var(--win98-dark) var(--win98-light) var(--win98-light) var(--win98-dark);
+}
+
+/* ---------------------------------------------------------------------------
+   Buttons — silver face, raised bevel, pressed on :active.
+   --------------------------------------------------------------------------- */
+.win98-button {
+  background-color: var(--win98-silver);
+  padding: 4px 14px;
+  border: 2px solid;
+  border-color: var(--win98-light) var(--win98-dark) var(--win98-dark) var(--win98-light);
+  font-family: inherit;
+  font-size: 12px;
+  color: #000;
+  cursor: default;
+  outline: none;
+}
+
+.win98-button:active:not(:disabled) {
+  border-color: var(--win98-dark) var(--win98-light) var(--win98-light) var(--win98-dark);
+  padding: 5px 13px 3px 15px; /* shift content 1px to fake the press */
+}
+
+.win98-button:disabled {
+  color: var(--win98-dark);
+  text-shadow: 1px 1px 0 #fff;
+}
+
+.win98-button:focus-visible {
+  outline: 1px dotted #000;
+  outline-offset: -4px;
+}
+
+/* ---------------------------------------------------------------------------
+   Window chrome.
+   --------------------------------------------------------------------------- */
+.win98-window {
+  background-color: var(--win98-silver);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+.win98-titlebar {
+  background: linear-gradient(90deg, var(--win98-navy) 0%, #1084d0 100%);
+  color: #fff;
+  font-weight: bold;
+  padding: 2px 3px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+}
+
+.win98-titlebar.inactive {
+  background: linear-gradient(90deg, #7b7b7b 0%, #b5b5b5 100%);
+}
+
+.win98-title-button {
+  width: 16px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--win98-silver);
+  border: 2px solid;
+  border-color: var(--win98-light) var(--win98-dark) var(--win98-dark) var(--win98-light);
+  font-size: 9px;
+  line-height: 1;
+  padding: 0;
+  cursor: default;
+}
+
+.win98-title-button:active {
+  border-color: var(--win98-dark) var(--win98-light) var(--win98-light) var(--win98-dark);
+}
+
+/* ---------------------------------------------------------------------------
+   Inputs / fields — sunken white well.
+   --------------------------------------------------------------------------- */
+.win98-field {
+  background-color: #fff;
+  border: 2px solid;
+  border-color: var(--win98-dark) var(--win98-light) var(--win98-light) var(--win98-dark);
+  padding: 3px 4px;
+  font-family: inherit;
+  font-size: 12px;
+  color: #000;
+  width: 100%;
+}
+
+.win98-field:focus {
+  outline: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Menus (Start menu, dropdowns).
+   --------------------------------------------------------------------------- */
+.win98-menu {
+  background-color: var(--win98-silver);
+  border: 2px solid;
+  border-color: var(--win98-light) var(--win98-dark) var(--win98-dark) var(--win98-light);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+.win98-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: default;
+  color: #000;
+}
+
+.win98-menu-item:hover {
+  background-color: var(--win98-navy);
+  color: #fff;
+}
+
+.win98-menu-separator {
+  height: 1px;
+  margin: 3px 2px;
+  background-color: var(--win98-dark);
+  border-bottom: 1px solid #fff;
+}
+
+/* ---------------------------------------------------------------------------
+   Taskbar.
+   --------------------------------------------------------------------------- */
+.win98-taskbar {
+  background-color: var(--win98-silver);
+  border-top: 2px solid var(--win98-light);
+  height: 32px;
+  display: flex;
+  align-items: stretch;
+  padding: 2px;
+  gap: 3px;
+}
+
+.win98-taskbar-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  background-color: var(--win98-silver);
+  border: 2px solid;
+  border-color: var(--win98-light) var(--win98-dark) var(--win98-dark) var(--win98-light);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: default;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.win98-taskbar-button.active {
+  border-color: var(--win98-dark) var(--win98-light) var(--win98-light) var(--win98-dark);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='2' height='2'%3E%3Crect width='1' height='1' fill='%23ffffff'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%23ffffff'/%3E%3C/svg%3E");
+}
+
+.win98-tray {
+  border: 2px solid;
+  border-color: var(--win98-dark) var(--win98-light) var(--win98-light) var(--win98-dark);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background-color: var(--win98-silver);
+}
+
+/* ---------------------------------------------------------------------------
+   The pixel board grid.
+   --------------------------------------------------------------------------- */
+.pixel-board-grid {
+  display: grid;
+  grid-template-columns: repeat(100, 1fr);
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background-color: #fff;
+}
+
+.pixel-cell {
+  aspect-ratio: 1 / 1;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background-color: #ffffff;
+  position: relative;
+  cursor: pointer;
+}
+
+.pixel-cell:nth-child(2n) {
+  background-color: #f4f4f4; /* faint checkerboard so empty spots read as pixels */
+}
+
+.pixel-cell:hover {
+  outline: 1px solid #000;
+  outline-offset: -1px;
+  z-index: 1;
+}
+
+.pixel-cell.owned {
+  background-size: cover;
+  background-position: center;
+}
+
+.pixel-cell.owned:hover {
+  outline: 1px solid #fff;
+}
+
+/* Tooltip shown over owned pixels. */
+.pixel-tooltip {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  white-space: nowrap;
+  background-color: #ffffe1;
+  border: 1px solid #000;
+  padding: 3px 6px;
+  font-size: 10px;
+  color: #000;
+  pointer-events: none;
+  box-shadow: 1px 1px 0 rgba(0, 0, 0, 0.4);
+}
+
+.pixel-cell.owned:hover .pixel-tooltip {
+  display: block;
+}
+
+/* ---------------------------------------------------------------------------
+   Notepad-style content (Story.txt, Readme.txt, Roadmap.txt).
+   --------------------------------------------------------------------------- */
+.win98-notepad {
+  background-color: #fff;
+  color: #000;
+  font-family: "Courier New", "Lucida Console", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  padding: 12px;
+  overflow: auto;
+}
+
+/* Retro scrollbars for the notepad/content windows. */
+.win98-notepad::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+}
+
+.win98-notepad::-webkit-scrollbar-track {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='2' height='2'%3E%3Crect width='1' height='1' fill='%23ffffff'/%3E%3Crect x='1' y='1' width='1' height='1' fill='%23ffffff'/%3E%3C/svg%3E");
+}
+
+.win98-notepad::-webkit-scrollbar-thumb {
+  background-color: var(--win98-silver);
+  border: 2px solid;
+  border-color: var(--win98-light) var(--win98-dark) var(--win98-dark) var(--win98-light);
+}
+
+/* ---------------------------------------------------------------------------
+   Desktop icons.
+   --------------------------------------------------------------------------- */
+.win98-desktop-icon {
+  width: 74px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  cursor: default;
+  text-align: center;
+  color: #fff;
+  font-size: 11px;
+  text-shadow: 1px 1px 0 #000;
+}
+
+.win98-desktop-icon.selected {
+  background-color: rgba(0, 0, 128, 0.6);
+}
+
+.win98-desktop-icon .icon-glyph {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------------------------------------------------------------------------
+   Neon banner templates (glitch / cyberpunk / flashing).
+   --------------------------------------------------------------------------- */
+.neon-glitch {
+  animation: sol98-glitch 0.7s infinite steps(1);
+}
+
+.neon-cyberpunk-pulse {
+  animation: sol98-pulse 1.1s infinite alternate;
+}
+
+.neon-matrix {
+  color: #00ff41;
+  text-shadow: 0 0 4px #00ff41, 0 0 10px #00ff41;
+  font-family: "Courier New", "Lucida Console", monospace;
+}
+
+.neon-flashing {
+  animation: sol98-border-flash 0.6s infinite alternate;
+}
+
+@keyframes sol98-glitch {
+  0% {
+    filter: none;
+    transform: none;
+  }
+  50% {
+    filter: hue-rotate(90deg) saturate(2);
+    transform: translateX(1px);
+  }
+  100% {
+    filter: none;
+    transform: none;
+  }
+}
+
+@keyframes sol98-pulse {
+  from {
+    text-shadow: 0 0 3px #00ffff, 0 0 6px #ff00ff;
+    box-shadow: 0 0 3px #00ffff, 0 0 6px #ff00ff;
+  }
+  to {
+    text-shadow: 0 0 8px #ff00ff, 0 0 14px #00ffff;
+    box-shadow: 0 0 10px #ff00ff, 0 0 16px #00ffff;
+  }
+}
+
+@keyframes sol98-border-flash {
+  from {
+    box-shadow: inset 0 0 2px #ff00ff, 0 0 2px #ff00ff;
+  }
+  to {
+    box-shadow: inset 0 0 6px #00ffff, 0 0 8px #00ffff;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Window resize grip (bottom-right corner).
+   --------------------------------------------------------------------------- */
+.win98-resize-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background-image: linear-gradient(135deg, transparent 0 50%, #808080 50% 62%, transparent 62% 100%),
+    linear-gradient(135deg, transparent 0 30%, #808080 30% 42%, transparent 42% 100%),
+    linear-gradient(135deg, transparent 0 10%, #808080 10% 22%, transparent 22% 100%);
+}
