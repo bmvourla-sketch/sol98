@@ -120,7 +120,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
         message: message.trim(),
         neon,
       };
-      if (multi) buyArea(indices, owner, ad);
+      if (multi) buyArea(indices, owner, ad, soldCount);
       else buyPixel(index, owner, ad);
       setAlert({
         kind: "success",
@@ -205,8 +205,15 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
         <div className="flex max-h-[72vh] flex-col gap-2 overflow-auto p-3">
           {mode === "buy" && (
             <div className="bevel-in px-2 py-1 text-xs">
-              {multi ? `Area: ${areaCols}×${areaRows} = ${indices.length} blocks` : "Single block (10×10 px)"} · Price:{" "}
-              <b>{formatSol(price)} SOL</b>
+              {multi ? (
+                <span>
+                  Area: {areaCols}×{areaRows} = {indices.length} blocks · first @{" "}
+                  {formatSol(nextPriceSol)}, +10% each ·{" "}
+                </span>
+              ) : (
+                <span>Single block (10×10 px) · </span>
+              )}
+              Total: <b>{formatSol(price)} SOL</b>
               <span className="text-[#808080]"> (bonding curve)</span>
             </div>
           )}

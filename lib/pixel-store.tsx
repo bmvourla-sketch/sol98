@@ -53,7 +53,7 @@ interface PixelContextValue {
   syncState: SyncState;
   buyPixel: (index: number, owner: string, ad: AdContent) => void;
   /** Buy a rectangular area of blocks as ONE banner (bigger area = bigger ad). */
-  buyArea: (indices: number[], owner: string, ad: AdContent) => void;
+  buyArea: (indices: number[], owner: string, ad: AdContent, baseOverride?: number) => void;
   /** Overtake a spot after a (real or simulated) burn. False if the spot vanished. */
   hijackPixel: (index: number, hijacker: string) => boolean;
   /** Deduct the mock $PIXEL98 balance (simulated-burn path only). */
@@ -152,8 +152,8 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   );
 
   const buyArea = useCallback(
-    (indices: number[], owner: string, ad: AdContent) => {
-      const base = Object.keys(pixels).length;
+    (indices: number[], owner: string, ad: AdContent, baseOverride?: number) => {
+      const base = baseOverride ?? Object.keys(pixels).length;
       const groupId = `b-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 
       const cols = indices.map((i) => i % BOARD_SIZE);

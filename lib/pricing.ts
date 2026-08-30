@@ -30,10 +30,19 @@ export function totalRaisedSol(soldCount: number): number {
   );
 }
 
-/** Total SOL to buy `count` blocks starting after `soldCount` already sold. */
+/**
+ * Total SOL to buy `count` blocks starting after `soldCount` already sold.
+ * Direct geometric-series form — avoids subtracting two large powers, which
+ * loses precision once the board grows.
+ */
 export function areaPrice(soldCount: number, count: number): number {
   if (count <= 0) return 0;
-  return totalRaisedSol(soldCount + count) - totalRaisedSol(soldCount);
+  return (
+    (INITIAL_PRICE_SOL *
+      Math.pow(1 + PRICE_INCREASE, soldCount) *
+      (Math.pow(1 + PRICE_INCREASE, count) - 1)) /
+    PRICE_INCREASE
+  );
 }
 
 /** Human-friendly SOL formatting; shows more decimals for sub-1-SOL amounts. */
