@@ -376,6 +376,15 @@ body {
   animation: sol98-rainbow 1.4s linear infinite;
 }
 
+.neon-sequential {
+  animation: sol98-sequential 0.8s steps(2) infinite;
+}
+
+@keyframes sol98-sequential {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
 @keyframes sol98-rainbow {
   0% { color: #ff0000; text-shadow: 0 0 4px #ff0000; }
   16% { color: #ff7f00; text-shadow: 0 0 4px #ff7f00; }

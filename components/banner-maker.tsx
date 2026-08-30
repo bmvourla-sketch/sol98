@@ -15,7 +15,10 @@ const NEON: { value: NeonTemplate; label: string; color: string }[] = [
   { value: "flashing", label: "Flashing", color: "#ff00ff" },
   { value: "glitch", label: "Glitch", color: "#ff0000" },
   { value: "rainbow", label: "Rainbow", color: "#ffffff" },
+  { value: "sequential", label: "Sequential", color: "#ffffff" },
 ];
+
+const SCALE = 8;
 
 interface OwnedArea {
   groupId: string;
@@ -44,6 +47,7 @@ export function BannerMaker() {
   const [link, setLink] = useState("");
   const [target, setTarget] = useState("");
   const [status, setStatus] = useState("");
+  const [frame, setFrame] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -68,12 +72,18 @@ export function BannerMaker() {
   const neonColor = NEON.find((n) => n.value === neon)?.color ?? "transparent";
 
   useEffect(() => {
+    if (neon !== "sequential") return;
+    const id = setInterval(() => setFrame((f) => f + 1), 220);
+    return () => clearInterval(id);
+  }, [neon]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const w = cols * 10;
-    const h = rows * 10;
+    const w = cols * 10 * SCALE;
+    const h = rows * 10 * SCALE;
     canvas.width = w;
     canvas.height = h;
     ctx.clearRect(0, 0, w, h);
@@ -99,6 +109,23 @@ export function BannerMaker() {
           cursor += cw;
         });
         ctx.shadowBlur = 0;
+      } else if (neon === "sequential") {
+        const chars = (text || "").split("");
+        const total = ctx.measureText(text || "").width;
+        let cursor = w / 2 - total / 2;
+        const lit = frame % Math.max(1, chars.length);
+        chars.forEach((ch, i) => {
+          const cw = ctx.measureText(ch).width;
+          const on = i === lit;
+          ctx.globalAlpha = on ? 1 : 0.25;
+          ctx.fillStyle = textColor;
+          ctx.shadowColor = textColor;
+          ctx.shadowBlur = on ? 12 : 0;
+          ctx.fillText(ch, cursor + cw / 2, h / 2);
+          cursor += cw;
+        });
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 0;
       } else {
         if (neon !== "none") {
           ctx.shadowColor = neonColor;
@@ -122,7 +149,7 @@ export function BannerMaker() {
     } else {
       drawText();
     }
-  }, [cols, rows, text, font, textColor, bgColor, imageUrl, neon, neonColor]);
+  }, [cols, rows, text, font, textColor, bgColor, imageUrl, neon, neonColor, frame]);
 
   function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -131,8 +158,8 @@ export function BannerMaker() {
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
-        const w = cols * 10;
-        const h = rows * 10;
+        const w = cols * 10 * SCALE;
+        const h = rows * 10 * SCALE;
         const c = document.createElement("canvas");
         c.width = w;
         c.height = h;
@@ -241,7 +268,7 @@ export function BannerMaker() {
       {/* Preview */}
       <span className="text-xs">Preview</span>
       <div className="bevel-in flex justify-center bg-[#404040] p-2">
-        <canvas ref={canvasRef} style={{ width: "100%", maxWidth: 240, imageRendering: "pixelated" }} />
+        <canvas ref={canvasRef} style={{ width: "100%", maxWidth: 360, imageRendering: "auto" }} />
       </div>
 
       {/* Target area */}
