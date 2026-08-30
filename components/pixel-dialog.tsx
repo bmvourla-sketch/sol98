@@ -207,8 +207,8 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
             <div className="bevel-in px-2 py-1 text-xs">
               {multi ? (
                 <span>
-                  Area: {areaCols}×{areaRows} = {indices.length} blocks · first @{" "}
-                  {formatSol(nextPriceSol)}, +10% each ·{" "}
+                  Area: {areaCols}×{areaRows} = {indices.length} blocks @{" "}
+                  {formatSol(nextPriceSol)} each (fixed price) ·{" "}
                 </span>
               ) : (
                 <span>Single block (10×10 px) · </span>

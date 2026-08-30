@@ -31,18 +31,13 @@ export function totalRaisedSol(soldCount: number): number {
 }
 
 /**
- * Total SOL to buy `count` blocks starting after `soldCount` already sold.
- * Direct geometric-series form — avoids subtracting two large powers, which
- * loses precision once the board grows.
+ * Total SOL to buy `count` blocks at the current price. Bulk purchases are
+ * sold at a FIXED price — every block in the purchase costs the current
+ * `nextSpotPrice`; the price only steps up (+10%) AFTER the purchase.
  */
 export function areaPrice(soldCount: number, count: number): number {
   if (count <= 0) return 0;
-  return (
-    (INITIAL_PRICE_SOL *
-      Math.pow(1 + PRICE_INCREASE, soldCount) *
-      (Math.pow(1 + PRICE_INCREASE, count) - 1)) /
-    PRICE_INCREASE
-  );
+  return count * nextSpotPrice(soldCount);
 }
 
 /** Human-friendly SOL formatting; shows more decimals for sub-1-SOL amounts. */
