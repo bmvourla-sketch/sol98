@@ -6,9 +6,11 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 
 import { BOARD_SIZE, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
 import { airdropFor, HIJACK_VALUATION_DECAY } from "./token";
@@ -99,10 +101,17 @@ function save(key: string, value: unknown): void {
   }
 }
 
+function u8ToBase64(u8: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+  return btoa(s);
+}
+
 export function PixelProvider({ children }: { children: ReactNode }) {
   const [pixels, setPixels] = useState<Record<number, PixelData>>({});
   const [balance, setBalance] = useState(0);
   const [syncState, setSyncState] = useState<SyncState>("loading");
+  const signerRef = useRef<((msg: Uint8Array) => Promise<Uint8Array>) | null>(null);
 
   useEffect(() => setPixels(load(PIXEL_CACHE_KEY, {})), []);
   useEffect(() => setBalance(load(BALANCE_STORAGE_KEY, 0)), []);
@@ -134,11 +143,22 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   useEffect(() => save(BALANCE_STORAGE_KEY, balance), [balance]);
 
   const syncPixel = useCallback(async (pixel: PixelData) => {
+    const sign = signerRef.current;
+    const message = `SOL-98:claim:${pixel.index}`;
+    let signature: string | null = null;
+    if (sign) {
+      try {
+        const sig = await sign(new TextEncoder().encode(message));
+        signature = u8ToBase64(sig);
+      } catch {
+        signature = null;
+      }
+    }
     try {
       await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pixel }),
+        body: JSON.stringify({ pixel, signature }),
       });
     } catch {
       // offline — stays in the local cache until the next successful fetch
@@ -423,7 +443,24 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     ]
   );
 
-  return <PixelContext.Provider value={value}>{children}</PixelContext.Provider>;
+  return (
+    <PixelContext.Provider value={value}>
+      <WalletSignerBridge signerRef={signerRef} />
+      {children}
+    </PixelContext.Provider>
+  );
+}
+
+function WalletSignerBridge({
+  signerRef,
+}: {
+  signerRef: { current: ((msg: Uint8Array) => Promise<Uint8Array>) | null },
+}) {
+  const { signMessage } = useWallet();
+  useEffect(() => {
+    signerRef.current = signMessage ?? null;
+  }, [signMessage, signerRef]);
+  return null;
 }
 
 export function usePixels(): PixelContextValue {

@@ -256,7 +256,7 @@ export function BannerMaker() {
       </div>
 
       {/* Image + link */}
-      <label className="text-xs" htmlFor="bm-img">Image (upload or URL)</label>
+      <label className="text-xs" htmlFor="bm-img">Image (optional - text + colors work without one)</label>
       <div className="flex gap-1">
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
         <button type="button" className="win98-button" onClick={() => fileRef.current?.click()}>Browse…</button>
