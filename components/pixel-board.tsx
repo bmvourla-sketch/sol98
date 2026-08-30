@@ -64,11 +64,9 @@ export function PixelBoard() {
         </div>
       </div>
 
-      {/* Board — fills the page */}
-      <div className="flex flex-1 justify-center overflow-auto">
-        <div className="bevel-in" style={{ width: "min(100%, calc(100dvh - 190px))" }}>
-          <div className="pixel-board-grid">{cells}</div>
-        </div>
+      {/* Board — fills the entire desktop */}
+      <div className="bevel-in min-h-0 flex-1 overflow-hidden">
+        <div className="pixel-board-grid">{cells}</div>
       </div>
 
       {/* Status */}
