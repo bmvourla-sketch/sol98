@@ -10,12 +10,12 @@ import {
   type ReactNode,
 } from "react";
 
-import { nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
+import { BOARD_SIZE, nextSpotPrice, spotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
 import { airdropFor, HIJACK_VALUATION_DECAY } from "./token";
 
 export type NeonTemplate = "none" | "cyberpunk-pulse" | "matrix" | "flashing" | "glitch";
 
-/** The ad payload attached to a spot. */
+/** The ad payload attached to a block (or a multi-block banner). */
 export interface AdContent {
   destination: string; // destination link
   imageUrl: string; // image / neon GIF
@@ -33,6 +33,12 @@ export interface PixelData extends AdContent {
   rentedUntil?: number;
   listingPriceSol?: number; // set → for sale
   rentPriceSol?: number; // set → for rent (per day)
+  // Multi-block banner grouping (spanning ad).
+  bannerGroupId?: string;
+  bannerCols?: number;
+  bannerRows?: number;
+  bannerX?: number; // 0-based col within the banner
+  bannerY?: number; // 0-based row within the banner
 }
 
 export type SyncState = "loading" | "live" | "offline";
@@ -46,6 +52,8 @@ interface PixelContextValue {
   pixel98Balance: number;
   syncState: SyncState;
   buyPixel: (index: number, owner: string, ad: AdContent) => void;
+  /** Buy a rectangular area of blocks as ONE banner (bigger area = bigger ad). */
+  buyArea: (indices: number[], owner: string, ad: AdContent) => void;
   /** Overtake a spot after a (real or simulated) burn. False if the spot vanished. */
   hijackPixel: (index: number, hijacker: string) => boolean;
   /** Deduct the mock $PIXEL98 balance (simulated-burn path only). */
@@ -94,12 +102,9 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   const [balance, setBalance] = useState(0);
   const [syncState, setSyncState] = useState<SyncState>("loading");
 
-  // Hydrate the offline cache immediately (instant paint), then let the server
-  // board overwrite/merge it below.
   useEffect(() => setPixels(load(PIXEL_CACHE_KEY, {})), []);
   useEffect(() => setBalance(load(BALANCE_STORAGE_KEY, 0)), []);
 
-  // Fetch the global board: on mount, every POLL_MS, and on window focus.
   const fetchPixels = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}?t=${Date.now()}`, { cache: "no-store" });
@@ -123,12 +128,9 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     };
   }, [fetchPixels]);
 
-  // Keep the offline cache warm.
   useEffect(() => save(PIXEL_CACHE_KEY, pixels), [pixels]);
   useEffect(() => save(BALANCE_STORAGE_KEY, balance), [balance]);
 
-  // Push a single changed pixel to the server (fire-and-forget; the poll
-  // reconciles on the next round if it fails).
   const syncPixel = useCallback(async (pixel: PixelData) => {
     try {
       await fetch(API_URL, {
@@ -149,22 +151,68 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     [syncPixel]
   );
 
-  const buyPixel = useCallback(
-    (index: number, owner: string, ad: AdContent) => {
-      const price = nextSpotPrice(Object.keys(pixels).length);
-      upsert({
-        index,
-        owner,
-        destination: ad.destination,
-        imageUrl: ad.imageUrl,
-        message: ad.message,
-        neon: ad.neon,
-        valuationSol: price,
-        purchasedAt: Date.now(),
-        isRented: false,
+  const buyArea = useCallback(
+    (indices: number[], owner: string, ad: AdContent) => {
+      const base = Object.keys(pixels).length;
+      const groupId = `b-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+
+      const cols = indices.map((i) => i % BOARD_SIZE);
+      const rows = indices.map((i) => Math.floor(i / BOARD_SIZE));
+      const minCol = Math.min(...cols);
+      const minRow = Math.min(...rows);
+      const bannerCols = Math.max(...cols) - minCol + 1;
+      const bannerRows = Math.max(...rows) - minRow + 1;
+
+      setPixels((prev) => {
+        const next = { ...prev };
+        indices.forEach((index, k) => {
+          next[index] = {
+            index,
+            owner,
+            destination: ad.destination,
+            imageUrl: ad.imageUrl,
+            message: ad.message,
+            neon: ad.neon,
+            valuationSol: spotPrice(base + k + 1),
+            purchasedAt: Date.now(),
+            isRented: false,
+            bannerGroupId: groupId,
+            bannerCols,
+            bannerRows,
+            bannerX: (index % BOARD_SIZE) - minCol,
+            bannerY: Math.floor(index / BOARD_SIZE) - minRow,
+          };
+        });
+        return next;
+      });
+
+      indices.forEach((index, k) => {
+        void syncPixel({
+          index,
+          owner,
+          destination: ad.destination,
+          imageUrl: ad.imageUrl,
+          message: ad.message,
+          neon: ad.neon,
+          valuationSol: spotPrice(base + k + 1),
+          purchasedAt: Date.now(),
+          isRented: false,
+          bannerGroupId: groupId,
+          bannerCols,
+          bannerRows,
+          bannerX: (index % BOARD_SIZE) - minCol,
+          bannerY: Math.floor(index / BOARD_SIZE) - minRow,
+        });
       });
     },
-    [pixels, upsert]
+    [pixels, syncPixel]
+  );
+
+  const buyPixel = useCallback(
+    (index: number, owner: string, ad: AdContent) => {
+      buyArea([index], owner, ad);
+    },
+    [buyArea]
   );
 
   const hijackPixel = useCallback(
@@ -185,6 +233,11 @@ export function PixelProvider({ children }: { children: ReactNode }) {
         rentedUntil: undefined,
         listingPriceSol: undefined,
         rentPriceSol: undefined,
+        bannerGroupId: undefined,
+        bannerCols: undefined,
+        bannerRows: undefined,
+        bannerX: undefined,
+        bannerY: undefined,
       });
       return true;
     },
@@ -312,6 +365,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       pixel98Balance: balance,
       syncState,
       buyPixel,
+      buyArea,
       hijackPixel,
       spendPixel98,
       editPixel,
@@ -331,6 +385,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       balance,
       syncState,
       buyPixel,
+      buyArea,
       hijackPixel,
       spendPixel98,
       editPixel,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { usePixels } from "@/lib/pixel-store";
@@ -10,42 +10,94 @@ import { PixelCell } from "./pixel-cell";
 import { PixelDialog } from "./pixel-dialog";
 
 const BASE_CELL = 16; // px at zoom = 1
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 8;
+
+function rectIndices(start: number, end: number): number[] {
+  const r1 = Math.floor(start / BOARD_SIZE);
+  const c1 = start % BOARD_SIZE;
+  const r2 = Math.floor(end / BOARD_SIZE);
+  const c2 = end % BOARD_SIZE;
+  const minR = Math.min(r1, r2);
+  const maxR = Math.max(r1, r2);
+  const minC = Math.min(c1, c2);
+  const maxC = Math.max(c1, c2);
+  const out: number[] = [];
+  for (let r = minR; r <= maxR; r++) for (let c = minC; c <= maxC; c++) out.push(r * BOARD_SIZE + c);
+  return out;
+}
 
 /**
- * The pixel board — rendered directly on the green desktop, scrollable and
- * zoomable. 200×200 = 40,000 blocks (each 10×10 px). Minimum purchase 10×10,
- * 0.2 SOL, +10% per sale, launch countdown at the 100th sale.
+ * The pixel board on the green desktop: drag to select a rectangular area,
+ * release to buy it as one banner. 100×100 blocks (10,000), each 10×10 px.
+ * Zoom is driven by the desktop (controls sit next to the wallet).
  */
-export function PixelBoard() {
+export function PixelBoard({ zoom }: { zoom: number }) {
   const { pixels, soldCount, nextPriceSol, totalRaisedSol, firstFreeIndex, syncState } =
     usePixels();
   const { connected } = useWallet();
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [zoom, setZoom] = useState(1);
+  const [sel, setSel] = useState<{ start: number; end: number } | null>(null);
+  const [activeIndices, setActiveIndices] = useState<number[] | null>(null);
+  const draggingRef = useRef(false);
+
+  const onSelectStart = useCallback((index: number) => {
+    draggingRef.current = true;
+    setSel({ start: index, end: index });
+  }, []);
+
+  const onSelectMove = useCallback((index: number) => {
+    if (draggingRef.current) setSel((s) => (s ? { ...s, end: index } : s));
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    if (draggingRef.current) {
+      draggingRef.current = false;
+      if (sel) {
+        setActiveIndices(rectIndices(sel.start, sel.end));
+        setSel(null);
+      }
+    }
+  }, [sel]);
 
   const cells = useMemo(() => {
+    let minR = -1, maxR = -1, minC = -1, maxC = -1;
+    if (sel) {
+      minR = Math.min(Math.floor(sel.start / BOARD_SIZE), Math.floor(sel.end / BOARD_SIZE));
+      maxR = Math.max(Math.floor(sel.start / BOARD_SIZE), Math.floor(sel.end / BOARD_SIZE));
+      minC = Math.min(sel.start % BOARD_SIZE, sel.end % BOARD_SIZE);
+      maxC = Math.max(sel.start % BOARD_SIZE, sel.end % BOARD_SIZE);
+    }
     const list: React.ReactElement[] = [];
     for (let i = 0; i < TOTAL_SPOTS; i++) {
-      list.push(<PixelCell key={i} index={i} pixel={pixels[i]} onInteract={setActiveIndex} />);
+      const r = Math.floor(i / BOARD_SIZE);
+      const c = i % BOARD_SIZE;
+      const selected = sel ? r >= minR && r <= maxR && c >= minC && c <= maxC : false;
+      list.push(
+        <PixelCell
+          key={i}
+          index={i}
+          pixel={pixels[i]}
+          selected={selected}
+          onSelectStart={onSelectStart}
+          onSelectMove={onSelectMove}
+        />
+      );
     }
     return list;
-  }, [pixels]);
+  }, [pixels, sel, onSelectStart, onSelectMove]);
 
   const remaining = Math.max(0, LAUNCH_TARGET_SPOTS - soldCount);
   const launchPct = Math.min(100, (soldCount / LAUNCH_TARGET_SPOTS) * 100);
   const cell = Math.max(1, Math.round(BASE_CELL * zoom));
+  const selCount = sel ? rectIndices(sel.start, sel.end).length : 0;
 
   return (
     <div className="flex h-full flex-col gap-2 p-3">
-      {/* Toolbar + zoom */}
+      {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
           className="win98-button"
           disabled={!connected || firstFreeIndex < 0}
-          onClick={() => setActiveIndex(firstFreeIndex)}
+          onClick={() => setActiveIndices([firstFreeIndex])}
         >
           Buy Pixel
         </button>
@@ -53,12 +105,10 @@ export function PixelBoard() {
           Next block: <b>{formatSol(nextPriceSol)} SOL</b>
           <span className="text-white/60"> (10×10 · +10%/sale)</span>
         </span>
-        <span className="ml-auto flex items-center gap-1">
-          <button type="button" className="win98-button !px-2 !py-0" onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.5))}>−</button>
-          <span className="w-12 text-center text-xs text-white">{Math.round(zoom * 100)}%</span>
-          <button type="button" className="win98-button !px-2 !py-0" onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * 1.5))}>+</button>
-          <button type="button" className="win98-button !px-2 !py-0" onClick={() => setZoom(1)}>1:1</button>
-        </span>
+        {selCount > 1 && (
+          <span className="text-xs text-yellow-200">Selected: {selCount} blocks</span>
+        )}
+        {!connected && <span className="text-[11px] text-yellow-200">Connect wallet to buy</span>}
       </div>
 
       {/* Launch countdown */}
@@ -72,8 +122,12 @@ export function PixelBoard() {
         </div>
       </div>
 
-      {/* Board — scrollable + zoomable */}
-      <div className="bevel-in min-h-0 flex-1 overflow-auto">
+      {/* Board — drag to select an area */}
+      <div
+        className="bevel-in min-h-0 flex-1 overflow-auto"
+        onMouseUp={handleMouseUp}
+        onMouseDown={(e) => e.preventDefault()}
+      >
         <div
           className="pixel-board-grid"
           style={{
@@ -101,8 +155,8 @@ export function PixelBoard() {
         </span>
       </div>
 
-      {activeIndex !== null && (
-        <PixelDialog index={activeIndex} onClose={() => setActiveIndex(null)} />
+      {activeIndices !== null && (
+        <PixelDialog indices={activeIndices} onClose={() => setActiveIndices(null)} />
       )}
     </div>
   );

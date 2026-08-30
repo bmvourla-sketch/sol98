@@ -63,6 +63,7 @@ export default function Desktop() {
   const [minimized, setMinimized] = useState<Partial<Record<WindowId, boolean>>>({});
   const [active, setActive] = useState<WindowId | null>(null);
   const [startOpen, setStartOpen] = useState(false);
+  const [zoom, setZoom] = useState(1);
 
   const openWindow = useCallback((id: WindowId) => {
     setOrder((prev) => (prev.includes(id) ? prev : [...prev, id]));
@@ -105,12 +106,16 @@ export default function Desktop() {
         <div className="flex h-screen flex-col overflow-hidden">
           {/* Green desktop = the pixel board */}
           <div className="relative flex-1 overflow-hidden">
-            {/* Floating wallet (top-right, no bar) */}
-            <div className="absolute right-2 top-2 z-20">
+            {/* Floating wallet + zoom (top-right, no bar) */}
+            <div className="absolute right-2 top-2 z-20 flex items-center gap-1">
+              <button type="button" className="win98-button !px-2 !py-0 text-[11px]" onClick={() => setZoom((z) => Math.max(0.2, z / 1.5))}>−</button>
+              <span className="w-10 text-center text-[11px] text-white">{Math.round(zoom * 100)}%</span>
+              <button type="button" className="win98-button !px-2 !py-0 text-[11px]" onClick={() => setZoom((z) => Math.min(8, z * 1.5))}>+</button>
+              <button type="button" className="win98-button !px-2 !py-0 text-[11px]" onClick={() => setZoom(1)}>1:1</button>
               <SolanaConnectButton />
             </div>
             <div className="h-full overflow-auto bg-[#008080]">
-              <PixelBoard />
+              <PixelBoard zoom={zoom} />
             </div>
 
             {/* Floating windows (draggable) */}

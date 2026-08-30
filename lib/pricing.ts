@@ -3,8 +3,8 @@
 // 10,000 spots (100 x 100). Spot #1 costs 0.2 SOL. Every purchase raises the
 // price of the *next available* spot by 10%, so:
 //     price(N) = 0.2 * 1.10^(N-1)     (N is 1-indexed)
-export const BOARD_SIZE = 200;
-export const TOTAL_SPOTS = BOARD_SIZE * BOARD_SIZE; // 40,000
+export const BOARD_SIZE = 100;
+export const TOTAL_SPOTS = BOARD_SIZE * BOARD_SIZE; // 10,000
 export const INITIAL_PRICE_SOL = 0.2;
 export const PRICE_INCREASE = 0.1; // +10% per spot
 
@@ -28,6 +28,12 @@ export function totalRaisedSol(soldCount: number): number {
     (INITIAL_PRICE_SOL * (Math.pow(1 + PRICE_INCREASE, soldCount) - 1)) /
     PRICE_INCREASE
   );
+}
+
+/** Total SOL to buy `count` blocks starting after `soldCount` already sold. */
+export function areaPrice(soldCount: number, count: number): number {
+  if (count <= 0) return 0;
+  return totalRaisedSol(soldCount + count) - totalRaisedSol(soldCount);
 }
 
 /** Human-friendly SOL formatting; shows more decimals for sub-1-SOL amounts. */

@@ -119,7 +119,7 @@ export function Market() {
         </div>
       ))}
 
-      {dialogIndex !== null && <PixelDialog index={dialogIndex} onClose={() => setDialogIndex(null)} />}
+      {dialogIndex !== null && <PixelDialog indices={[dialogIndex]} onClose={() => setDialogIndex(null)} />}
     </div>
   );
 }
