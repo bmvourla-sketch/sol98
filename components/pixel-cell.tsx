@@ -19,10 +19,10 @@ const NEON_CLASS: Partial<Record<NeonTemplate, string>> = {
 };
 
 /**
- * A single 10x10-pixel spot. Clicking opens the interaction dialog (buy if
+ * A single 10×10-pixel block. Clicking opens the interaction dialog (buy if
  * empty, hijack if owned by someone else, manage if owned by you). Owned cells
- * render the ad image and apply the selected neon template; hovering shows the
- * owner + message tooltip.
+ * render the ad image and apply the selected neon template; hovering shows a
+ * zoomed tooltip (image + owner + message).
  */
 export const PixelCell = memo(function PixelCell({ index, pixel, onInteract }: PixelCellProps) {
   const neonClass = pixel && pixel.neon !== "none" ? NEON_CLASS[pixel.neon] ?? "" : "";
@@ -37,6 +37,10 @@ export const PixelCell = memo(function PixelCell({ index, pixel, onInteract }: P
     >
       {pixel && (
         <span className={`pixel-tooltip${neonClass ? ` ${neonClass}` : ""}`}>
+          {pixel.imageUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={pixel.imageUrl} alt="Ad" className="h-12 w-12 object-cover" />
+          )}
           <b>{shortenAddress(pixel.owner, 6)}</b>
           {pixel.message && <span> · {pixel.message}</span>}
           {pixel.isRented && <span> · rented</span>}

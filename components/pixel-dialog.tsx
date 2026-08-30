@@ -7,7 +7,7 @@ import { X } from "lucide-react";
 import { usePixels, type NeonTemplate } from "@/lib/pixel-store";
 import { formatSol } from "@/lib/pricing";
 import { hijackCostInTokens, TOKEN_SYMBOL } from "@/lib/token";
-import { shortenAddress } from "@/lib/solana";
+import { isTokenLive, shortenAddress } from "@/lib/solana";
 import { useBurnPixel98, useSendSolTransfer } from "@/lib/use-solana-tx";
 import { Win98Alert } from "./win98-alert";
 
@@ -77,6 +77,7 @@ export function PixelDialog({ index, onClose }: PixelDialogProps) {
 
   const mode: "buy" | "hijack" | "manage" = !pixel ? "buy" : pixel.owner === owner ? "manage" : "hijack";
   const hijackCost = pixel ? hijackCostInTokens(pixel.valuationSol) : 0;
+  const tokenLive = isTokenLive();
   const busy = txStatus === "awaiting_signature" || txStatus === "processing";
 
   const title =
@@ -204,6 +205,9 @@ export function PixelDialog({ index, onClose }: PixelDialogProps) {
                 <span className="text-[#808080]"> (balance: {pixel98Balance})</span>
               </span>
               <span className="text-[#808080]">Hijack → valuation −5%</span>
+              {!tokenLive && (
+                <span className="text-[#800000]">Coming Soon — $PIXEL98 (Pump.fun) not live yet</span>
+              )}
             </div>
           )}
 
@@ -319,12 +323,14 @@ export function PixelDialog({ index, onClose }: PixelDialogProps) {
               </button>
             )}
             {mode === "hijack" && (
-              <button type="button" className="win98-button" onClick={handleHijack} disabled={busy}>
-                {txStatus === "awaiting_signature"
-                  ? "Confirm burn…"
-                  : txStatus === "processing"
-                    ? "Burning…"
-                    : `Hijack (${hijackCost})`}
+              <button type="button" className="win98-button" onClick={handleHijack} disabled={busy || !tokenLive}>
+                {!tokenLive
+                  ? "Coming Soon"
+                  : txStatus === "awaiting_signature"
+                    ? "Confirm burn…"
+                    : txStatus === "processing"
+                      ? "Burning…"
+                      : `Hijack (${hijackCost})`}
               </button>
             )}
             {mode === "manage" && (

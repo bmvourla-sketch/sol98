@@ -21,6 +21,11 @@ export const TREASURY_ADDRESS = process.env.NEXT_PUBLIC_TREASURY_ADDRESS?.trim()
  */
 export const PIXEL98_MINT = process.env.NEXT_PUBLIC_PIXEL98_MINT?.trim() ?? "";
 
+/** True once the $PIXEL98 mint is set (post Pump.fun launch). */
+export function isTokenLive(): boolean {
+  return PIXEL98_MINT.length > 0;
+}
+
 export function getSolanaRpcEndpoint(): string {
   // Accept both `NEXT_PUBLIC_SOLANA_RPC_URL` (the existing payment system's
   // naming) and `NEXT_PUBLIC_SOLANA_RPC` (legacy) for a smooth merge.

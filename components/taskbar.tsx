@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 
 import type { WindowId } from "./desktop";
 import { StartMenu } from "./start-menu";
-import { SolanaConnectButton } from "./solana-connect-button";
 
 export interface TaskbarWindow {
   id: WindowId;
@@ -70,7 +69,6 @@ export function Taskbar({
       </div>
 
       <div className="win98-tray">
-        <SolanaConnectButton />
         <span className="text-[11px] tabular-nums">{time}</span>
       </div>
 

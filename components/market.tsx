@@ -6,7 +6,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { usePixels } from "@/lib/pixel-store";
 import { formatSol } from "@/lib/pricing";
 import { TOKEN_SYMBOL } from "@/lib/token";
-import { shortenAddress } from "@/lib/solana";
+import { isTokenLive, shortenAddress } from "@/lib/solana";
 import { PixelDialog } from "./pixel-dialog";
 
 /**
@@ -44,18 +44,24 @@ export function Market() {
 
   return (
     <div className="flex h-full flex-col gap-2 overflow-auto bg-[#c0c0c0] p-2 text-xs">
-      {/* Balance + faucet + airdrop estimate */}
-      <div className="bevel-in flex flex-wrap items-center gap-3 px-2 py-1">
-        <span>
-          {TOKEN_SYMBOL} balance: <b>{ctx.pixel98Balance}</b>
-        </span>
-        <button type="button" className="win98-button !px-2 !py-0" onClick={() => ctx.claimPixel98(10000)}>
-          Claim 10,000 test {TOKEN_SYMBOL}
-        </button>
-        <span className="ml-auto text-[#808080]">
-          Airdrop: {ctx.airdropForOwner(owner)} {TOKEN_SYMBOL} ({ctx.spotsOwnedBy(owner)} spots)
-        </span>
-      </div>
+      {/* Token balance + faucet + airdrop (gated until Pump.fun launch) */}
+      {isTokenLive() ? (
+        <div className="bevel-in flex flex-wrap items-center gap-3 px-2 py-1">
+          <span>
+            {TOKEN_SYMBOL} balance: <b>{ctx.pixel98Balance}</b>
+          </span>
+          <button type="button" className="win98-button !px-2 !py-0" onClick={() => ctx.claimPixel98(10000)}>
+            Claim 10,000 test {TOKEN_SYMBOL}
+          </button>
+          <span className="ml-auto text-[#808080]">
+            Airdrop: {ctx.airdropForOwner(owner)} {TOKEN_SYMBOL} ({ctx.spotsOwnedBy(owner)} spots)
+          </span>
+        </div>
+      ) : (
+        <div className="bevel-in px-2 py-1 text-xs text-[#808080]">
+          {TOKEN_SYMBOL} · Airdrop · Hijack — Coming Soon (Pump.fun launch)
+        </div>
+      )}
 
       {!connected && <div className="text-[#800000]">Connect wallet to use the market.</div>}
 

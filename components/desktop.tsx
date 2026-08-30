@@ -1,10 +1,8 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { BookOpen, FileText, LayoutGrid, Map, Store, type LucideIcon } from "lucide-react";
 
 import { PixelProvider } from "@/lib/pixel-store";
-import { DesktopIcon } from "./desktop-icon";
 import { Market } from "./market";
 import { PixelBoard } from "./pixel-board";
 import { Roadmap } from "./roadmap";
@@ -17,7 +15,6 @@ export type WindowId = "board" | "market" | "story" | "whitepaper" | "roadmap";
 
 interface WinDef {
   title: string;
-  Icon: LucideIcon;
   Component: React.ComponentType;
   pos: { x: number; y: number };
   size: { width: number; height: number };
@@ -26,42 +23,35 @@ interface WinDef {
 const WINDOWS: Record<WindowId, WinDef> = {
   board: {
     title: "Board.exe",
-    Icon: LayoutGrid,
     Component: PixelBoard,
-    pos: { x: 40, y: 24 },
-    size: { width: 660, height: 780 },
+    pos: { x: 20, y: 16 },
+    size: { width: 720, height: 760 },
   },
   market: {
     title: "Market.exe",
-    Icon: Store,
     Component: Market,
     pos: { x: 120, y: 60 },
     size: { width: 520, height: 460 },
   },
   story: {
     title: "Story.exe",
-    Icon: BookOpen,
     Component: Story,
-    pos: { x: 180, y: 100 },
-    size: { width: 480, height: 400 },
+    pos: { x: 160, y: 90 },
+    size: { width: 480, height: 420 },
   },
   whitepaper: {
     title: "Readme.txt",
-    Icon: FileText,
     Component: Whitepaper,
-    pos: { x: 210, y: 130 },
-    size: { width: 520, height: 500 },
+    pos: { x: 190, y: 120 },
+    size: { width: 540, height: 540 },
   },
   roadmap: {
     title: "Roadmap.exe",
-    Icon: Map,
     Component: Roadmap,
-    pos: { x: 240, y: 160 },
-    size: { width: 480, height: 440 },
+    pos: { x: 220, y: 150 },
+    size: { width: 480, height: 460 },
   },
 };
-
-const DESKTOP_ICON_ORDER: WindowId[] = ["board", "market", "story", "whitepaper", "roadmap"];
 
 export default function Desktop() {
   // `order` is also the z-order: the last item is the topmost window.
@@ -109,7 +99,7 @@ export default function Desktop() {
     <PixelProvider>
       <div className="flex h-screen flex-col overflow-hidden">
         <div className="relative flex-1">
-          {/* Top-right quick access */}
+          {/* Top-right quick access (clean desktop) */}
           <div className="absolute right-2 top-2 z-0 flex gap-1">
             <button type="button" className="win98-button" onClick={() => openWindow("whitepaper")}>
               Whitepaper
@@ -120,21 +110,6 @@ export default function Desktop() {
             <button type="button" className="win98-button" onClick={() => openWindow("roadmap")}>
               Roadmap
             </button>
-          </div>
-
-          {/* Desktop shortcuts */}
-          <div className="absolute left-3 top-3 z-0 flex flex-col gap-1">
-            {DESKTOP_ICON_ORDER.map((id) => {
-              const def = WINDOWS[id];
-              return (
-                <DesktopIcon
-                  key={id}
-                  label={def.title}
-                  Icon={def.Icon}
-                  onDoubleClick={() => openWindow(id)}
-                />
-              );
-            })}
           </div>
 
           {/* Windows (z-order = array order) */}

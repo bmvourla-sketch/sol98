@@ -27,11 +27,11 @@ CHAPTER II: THE REIMAGINING (2026, ON SOLANA)
 In a world of fast blockchains, one board remains to capture the
 history of degens.
 
-    10,000 blocks. One mission.
+    1,000,000 pixels. 10,000 blocks. One mission.
 
-SOL-98 is The Million Dollar Homepage reimagined for Solana.
-Every spot is a 10x10 block, owned on-chain, permanent, and
-provably yours. Buy a block, drop a link, paint your pixel —
+SOL-98 is The Million Dollar Homepage reimagined for Solana. The
+canvas is 1000×1000 pixels, sold in 10×10 blocks — each block is
+owned on-chain, permanent, and provably yours. Buy a block, drop a link, paint your pixel —
 and become part of the board that remembers.
 
 But this time the pixels fight back. If someone wants your spot,

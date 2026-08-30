@@ -4,11 +4,11 @@ const WHITEPAPER = `SOL-98 — README.TXT (WHITEPAPER)  v1.0
 EXECUTIVE SUMMARY
 
     SOL-98 is The Million Dollar Homepage reimagined as a permanent,
-    on-chain billboard on Solana. 10,000 ad spots (a 100 x 100 grid of
-    10x10-pixel blocks) are sold on a bonding curve that starts at
-    0.2 SOL per spot. The board is a decentralized ad space with a
-    built-in attention game: anyone can burn $PIXEL98 to HIJACK a spot,
-    and every hijack devalues the target by 5%.
+    on-chain billboard on Solana. 1,000,000 pixels (a 1000×1000 canvas)
+    are sold in 10×10 blocks (10,000 blocks) on a bonding curve that
+    starts at 0.2 SOL per block. The board is a decentralized ad space
+    with a built-in attention game: anyone can burn $PIXEL98 to HIJACK a
+    block, and every hijack devalues the target by 5%.
 
 ================================================================================
 
@@ -41,11 +41,15 @@ EXECUTIVE SUMMARY
     compounds with every block sold. Spots never go down in price.
 
     Examples:
-      spot #1      0.2000 SOL
-      spot #2      0.2200 SOL
-      spot #10     0.4716 SOL
-      spot #50     21.4433 SOL
-      spot #100    2,512.1000 SOL   (the curve steepens fast)
+      block #1     0.2000 SOL
+      block #2     0.2200 SOL
+      block #10    0.4716 SOL
+      block #50    21.3438 SOL
+      block #100   2,505.5659 SOL   (the curve steepens fast)
+
+    Homage: the 2005 original sold each pixel for $1 (minimum $100
+    per 10×10 block). SOL-98 keeps the same 10×10 block structure
+    with a 0.2 SOL starting price per block.
 
 ================================================================================
 
