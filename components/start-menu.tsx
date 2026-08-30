@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, FileText, LayoutGrid, Map, Store, type LucideIcon } from "lucide-react";
+import { BookOpen, FileText, LayoutGrid, Map, Palette, Store, type LucideIcon } from "lucide-react";
 
 import type { WindowId } from "./desktop";
 
@@ -10,6 +10,7 @@ const ITEMS: { id: WindowId; label: string; Icon: LucideIcon }[] = [
   { id: "story", label: "Story.exe", Icon: BookOpen },
   { id: "whitepaper", label: "Whitepaper", Icon: FileText },
   { id: "roadmap", label: "Roadmap.exe", Icon: Map },
+  { id: "banner", label: "Banner Maker", Icon: Palette },
 ];
 
 interface StartMenuProps {

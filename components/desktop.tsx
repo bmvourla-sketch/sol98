@@ -5,6 +5,7 @@ import { useCallback, useState } from "react";
 import { DocumentProvider } from "@/lib/document-store";
 import { PixelProvider } from "@/lib/pixel-store";
 import { DocumentSale } from "./document-sale";
+import { BannerMaker } from "./banner-maker";
 import { Market } from "./market";
 import { PixelBoard } from "./pixel-board";
 import { Roadmap } from "./roadmap";
@@ -14,7 +15,7 @@ import { Taskbar } from "./taskbar";
 import { Whitepaper } from "./whitepaper";
 import { Window } from "./window";
 
-export type WindowId = "board" | "market" | "story" | "whitepaper" | "roadmap";
+export type WindowId = "board" | "market" | "story" | "whitepaper" | "roadmap" | "banner";
 
 interface WinDef {
   title: string;
@@ -53,6 +54,12 @@ const WINDOWS: Record<WindowId, WinDef> = {
     Component: Roadmap,
     pos: { x: 220, y: 150 },
     size: { width: 480, height: 460 },
+  },
+  banner: {
+    title: "Banner.exe",
+    Component: BannerMaker,
+    pos: { x: 100, y: 50 },
+    size: { width: 460, height: 620 },
   },
 };
 

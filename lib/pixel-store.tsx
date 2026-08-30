@@ -59,6 +59,8 @@ interface PixelContextValue {
   /** Deduct the mock $PIXEL98 balance (simulated-burn path only). */
   spendPixel98: (amount: number) => boolean;
   editPixel: (index: number, ad: Partial<AdContent>) => void;
+  /** Apply an ad/banner to every block in a banner group. */
+  editArea: (groupId: string, ad: Partial<AdContent>) => void;
   listForSale: (index: number, priceSol: number) => void;
   buyListing: (index: number, buyer: string) => void;
   listForRent: (index: number, priceSolPerDay: number) => void;
@@ -262,6 +264,25 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     [pixels, upsert]
   );
 
+  const editArea = useCallback(
+    (groupId: string, ad: Partial<AdContent>) => {
+      const updated: PixelData[] = [];
+      for (const key in pixels) {
+        if (pixels[key].bannerGroupId === groupId) {
+          updated.push({ ...pixels[key], ...ad });
+        }
+      }
+      if (updated.length === 0) return;
+      setPixels((prev) => {
+        const next = { ...prev };
+        for (const p of updated) next[p.index] = p;
+        return next;
+      });
+      for (const p of updated) void syncPixel(p);
+    },
+    [pixels, syncPixel]
+  );
+
   const listForSale = useCallback(
     (index: number, priceSol: number) => {
       const cur = pixels[index];
@@ -369,6 +390,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       hijackPixel,
       spendPixel98,
       editPixel,
+      editArea,
       listForSale,
       buyListing,
       listForRent,
@@ -389,6 +411,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       hijackPixel,
       spendPixel98,
       editPixel,
+      editArea,
       listForSale,
       buyListing,
       listForRent,
