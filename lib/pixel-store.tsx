@@ -13,7 +13,7 @@ import {
 import { BOARD_SIZE, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
 import { airdropFor, HIJACK_VALUATION_DECAY } from "./token";
 
-export type NeonTemplate = "none" | "cyberpunk-pulse" | "matrix" | "flashing" | "glitch";
+export type NeonTemplate = "none" | "cyberpunk-pulse" | "matrix" | "flashing" | "glitch" | "rainbow";
 
 /** The ad payload attached to a block (or a multi-block banner). */
 export interface AdContent {

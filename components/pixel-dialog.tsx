@@ -24,6 +24,7 @@ const NEON_OPTIONS: { value: NeonTemplate; label: string }[] = [
   { value: "matrix", label: "Matrix Text" },
   { value: "flashing", label: "Flashing Neon Border" },
   { value: "glitch", label: "Sub-Domain Glitch" },
+  { value: "rainbow", label: "Rainbow" },
 ];
 
 const NEON_PREVIEW_CLASS: Partial<Record<NeonTemplate, string>> = {
@@ -31,6 +32,7 @@ const NEON_PREVIEW_CLASS: Partial<Record<NeonTemplate, string>> = {
   matrix: "neon-matrix",
   flashing: "neon-flashing",
   glitch: "neon-glitch",
+  rainbow: "neon-rainbow",
 };
 
 interface AlertState {

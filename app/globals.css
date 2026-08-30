@@ -372,6 +372,20 @@ body {
   animation: sol98-border-flash 0.6s infinite alternate;
 }
 
+.neon-rainbow {
+  animation: sol98-rainbow 1.4s linear infinite;
+}
+
+@keyframes sol98-rainbow {
+  0% { color: #ff0000; text-shadow: 0 0 4px #ff0000; }
+  16% { color: #ff7f00; text-shadow: 0 0 4px #ff7f00; }
+  33% { color: #ffff00; text-shadow: 0 0 4px #ffff00; }
+  50% { color: #00ff00; text-shadow: 0 0 4px #00ff00; }
+  66% { color: #00ffff; text-shadow: 0 0 4px #00ffff; }
+  83% { color: #ff00ff; text-shadow: 0 0 4px #ff00ff; }
+  100% { color: #ff0000; text-shadow: 0 0 4px #ff0000; }
+}
+
 @keyframes sol98-glitch {
   0% {
     filter: none;

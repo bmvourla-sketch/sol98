@@ -18,6 +18,7 @@ const NEON_CLASS: Partial<Record<NeonTemplate, string>> = {
   matrix: "neon-matrix",
   flashing: "neon-flashing",
   glitch: "neon-glitch",
+  rainbow: "neon-rainbow",
 };
 
 /**

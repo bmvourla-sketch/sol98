@@ -14,6 +14,7 @@ const NEON: { value: NeonTemplate; label: string; color: string }[] = [
   { value: "matrix", label: "Matrix", color: "#00ff41" },
   { value: "flashing", label: "Flashing", color: "#ff00ff" },
   { value: "glitch", label: "Glitch", color: "#ff0000" },
+  { value: "rainbow", label: "Rainbow", color: "#ffffff" },
 ];
 
 interface OwnedArea {
@@ -45,6 +46,7 @@ export function BannerMaker() {
   const [status, setStatus] = useState("");
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const ownedAreas = useMemo<OwnedArea[]>(() => {
     const map = new Map<string, OwnedArea>();
@@ -78,17 +80,34 @@ export function BannerMaker() {
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, w, h);
 
+    const RAINBOW = ["#ff0000", "#ff7f00", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff"];
     const drawText = () => {
       ctx.font = `bold ${Math.max(8, Math.round(h * 0.4))}px "${font}"`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      if (neon !== "none") {
-        ctx.shadowColor = neonColor;
-        ctx.shadowBlur = 8;
+      if (neon === "rainbow") {
+        const chars = (text || "").split("");
+        const total = ctx.measureText(text || "").width;
+        let cursor = w / 2 - total / 2;
+        chars.forEach((ch, i) => {
+          const cw = ctx.measureText(ch).width;
+          const color = RAINBOW[i % RAINBOW.length];
+          ctx.fillStyle = color;
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 4;
+          ctx.fillText(ch, cursor + cw / 2, h / 2);
+          cursor += cw;
+        });
+        ctx.shadowBlur = 0;
+      } else {
+        if (neon !== "none") {
+          ctx.shadowColor = neonColor;
+          ctx.shadowBlur = 8;
+        }
+        ctx.fillStyle = textColor;
+        ctx.fillText(text || "", w / 2, h / 2);
+        ctx.shadowBlur = 0;
       }
-      ctx.fillStyle = textColor;
-      ctx.fillText(text || "", w / 2, h / 2);
-      ctx.shadowBlur = 0;
     };
 
     if (imageUrl) {
@@ -105,6 +124,31 @@ export function BannerMaker() {
     }
   }, [cols, rows, text, font, textColor, bgColor, imageUrl, neon, neonColor]);
 
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const w = cols * 10;
+        const h = rows * 10;
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        const cx = c.getContext("2d");
+        if (!cx) return;
+        const scale = Math.max(w / img.width, h / img.height);
+        const sw = w / scale;
+        const sh = h / scale;
+        cx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, w, h);
+        setImageUrl(c.toDataURL("image/png"));
+        setStatus("Image uploaded & optimized to " + w + "x" + h + "px.");
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  }
   function download() {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -185,8 +229,12 @@ export function BannerMaker() {
       </div>
 
       {/* Image + link */}
-      <label className="text-xs" htmlFor="bm-img">Image URL (optional)</label>
-      <input id="bm-img" className="win98-field" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://.../logo.png" />
+      <label className="text-xs" htmlFor="bm-img">Image (upload or URL)</label>
+      <div className="flex gap-1">
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+        <button type="button" className="win98-button" onClick={() => fileRef.current?.click()}>Browse…</button>
+        <input id="bm-img" className="win98-field" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="or paste https://.../logo.png" />
+      </div>
       <label className="text-xs" htmlFor="bm-link">Link URL</label>
       <input id="bm-link" className="win98-field" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://your-site.com" />
 

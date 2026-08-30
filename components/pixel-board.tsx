@@ -33,7 +33,7 @@ function rectIndices(start: number, end: number): number[] {
 export function PixelBoard({ zoom }: { zoom: number }) {
   const { pixels, soldCount, nextPriceSol, totalRaisedSol, firstFreeIndex, syncState } =
     usePixels();
-  const { connected } = useWallet();
+  const { connected, publicKey } = useWallet();
   const [sel, setSel] = useState<{ start: number; end: number } | null>(null);
   const [activeIndices, setActiveIndices] = useState<number[] | null>(null);
   const draggingRef = useRef(false);
@@ -47,15 +47,27 @@ export function PixelBoard({ zoom }: { zoom: number }) {
     if (draggingRef.current) setSel((s) => (s ? { ...s, end: index } : s));
   }, []);
 
+  const me = publicKey?.toBase58() ?? "";
+
   const handleMouseUp = useCallback(() => {
     if (draggingRef.current) {
       draggingRef.current = false;
       if (sel) {
-        setActiveIndices(rectIndices(sel.start, sel.end));
+        const indices = rectIndices(sel.start, sel.end);
+        // Clicking a single owned ad with a link redirects to it (click-through).
+        if (indices.length === 1) {
+          const p = pixels[indices[0]];
+          if (p && p.destination && p.owner !== me) {
+            window.open(p.destination, "_blank", "noopener,noreferrer");
+            setSel(null);
+            return;
+          }
+        }
+        setActiveIndices(indices);
         setSel(null);
       }
     }
-  }, [sel]);
+  }, [sel, pixels, me]);
 
   const cells = useMemo(() => {
     let minR = -1, maxR = -1, minC = -1, maxC = -1;
