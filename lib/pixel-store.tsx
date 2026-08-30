@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { nextSpotPrice, totalRaisedSol } from "./pricing";
+import { nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
 import { airdropFor, HIJACK_VALUATION_DECAY } from "./token";
 
 export type NeonTemplate = "none" | "cyberpunk-pulse" | "matrix" | "flashing" | "glitch";
@@ -279,7 +279,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   const soldCount = Object.keys(pixels).length;
 
   const firstFreeIndex = useMemo(() => {
-    for (let i = 0; i < 10_000; i++) {
+    for (let i = 0; i < TOTAL_SPOTS; i++) {
       if (!pixels[i]) return i;
     }
     return -1;

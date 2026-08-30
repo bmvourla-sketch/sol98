@@ -45,8 +45,8 @@ export async function writePixel(pixel: unknown): Promise<void> {
 
   const store = await load();
   const rec = pixel as { index?: number };
-  if (typeof rec?.index !== "number" || rec.index < 0 || rec.index >= 10_000) {
-    throw new Error("pixel.index must be a number in [0, 9999]");
+  if (typeof rec?.index !== "number" || rec.index < 0 || rec.index >= 40_000) {
+    throw new Error("pixel.index must be a number in [0, 39999]");
   }
   store[rec.index] = pixel;
 

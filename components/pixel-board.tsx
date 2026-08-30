@@ -4,15 +4,18 @@ import { useMemo, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { usePixels } from "@/lib/pixel-store";
-import { formatSol, TOTAL_SPOTS } from "@/lib/pricing";
+import { BOARD_SIZE, formatSol, TOTAL_SPOTS } from "@/lib/pricing";
 import { LAUNCH_TARGET_SPOTS } from "@/lib/token";
 import { PixelCell } from "./pixel-cell";
 import { PixelDialog } from "./pixel-dialog";
 
+const BASE_CELL = 16; // px at zoom = 1
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 8;
+
 /**
- * The pixel board — rendered directly on the green desktop (not in a window),
- * sized to fit the whole page. 100×100 blocks (10,000 spots), each a 10×10 px
- * area = a 1000×1000 px canvas (1,000,000 pixels). Minimum purchase 10×10,
+ * The pixel board — rendered directly on the green desktop, scrollable and
+ * zoomable. 200×200 = 40,000 blocks (each 10×10 px). Minimum purchase 10×10,
  * 0.2 SOL, +10% per sale, launch countdown at the 100th sale.
  */
 export function PixelBoard() {
@@ -20,6 +23,7 @@ export function PixelBoard() {
     usePixels();
   const { connected } = useWallet();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [zoom, setZoom] = useState(1);
 
   const cells = useMemo(() => {
     const list: React.ReactElement[] = [];
@@ -31,10 +35,11 @@ export function PixelBoard() {
 
   const remaining = Math.max(0, LAUNCH_TARGET_SPOTS - soldCount);
   const launchPct = Math.min(100, (soldCount / LAUNCH_TARGET_SPOTS) * 100);
+  const cell = Math.max(1, Math.round(BASE_CELL * zoom));
 
   return (
     <div className="flex h-full flex-col gap-2 p-3">
-      {/* Toolbar */}
+      {/* Toolbar + zoom */}
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
@@ -46,14 +51,17 @@ export function PixelBoard() {
         </button>
         <span className="text-xs text-white">
           Next block: <b>{formatSol(nextPriceSol)} SOL</b>
-          <span className="text-white/60"> (min 10×10 · +10% per sale)</span>
+          <span className="text-white/60"> (10×10 · +10%/sale)</span>
         </span>
-        {!connected && (
-          <span className="text-[11px] text-yellow-200">Connect wallet to buy</span>
-        )}
+        <span className="ml-auto flex items-center gap-1">
+          <button type="button" className="win98-button !px-2 !py-0" onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.5))}>−</button>
+          <span className="w-12 text-center text-xs text-white">{Math.round(zoom * 100)}%</span>
+          <button type="button" className="win98-button !px-2 !py-0" onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * 1.5))}>+</button>
+          <button type="button" className="win98-button !px-2 !py-0" onClick={() => setZoom(1)}>1:1</button>
+        </span>
       </div>
 
-      {/* Launch countdown — the 100th sale triggers the Pump.fun launch */}
+      {/* Launch countdown */}
       <div className="bevel-in flex items-center gap-2 px-2 py-1 text-xs">
         <span>Launch countdown:</span>
         <span>
@@ -64,9 +72,17 @@ export function PixelBoard() {
         </div>
       </div>
 
-      {/* Board — fills the entire desktop */}
-      <div className="bevel-in min-h-0 flex-1 overflow-hidden">
-        <div className="pixel-board-grid">{cells}</div>
+      {/* Board — scrollable + zoomable */}
+      <div className="bevel-in min-h-0 flex-1 overflow-auto">
+        <div
+          className="pixel-board-grid"
+          style={{
+            gridTemplateColumns: `repeat(${BOARD_SIZE}, ${cell}px)`,
+            gridTemplateRows: `repeat(${BOARD_SIZE}, ${cell}px)`,
+          }}
+        >
+          {cells}
+        </div>
       </div>
 
       {/* Status */}
@@ -74,7 +90,9 @@ export function PixelBoard() {
         <span>
           Blocks sold: <b>{soldCount}</b> / {TOTAL_SPOTS}
         </span>
-        <span>100×100 · 10,000 blocks · 1,000,000 px</span>
+        <span>
+          {BOARD_SIZE}×{BOARD_SIZE} blocks
+        </span>
         <span>
           Raised: <b>{formatSol(totalRaisedSol)} SOL</b>
         </span>
