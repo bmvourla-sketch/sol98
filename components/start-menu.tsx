@@ -8,7 +8,7 @@ const ITEMS: { id: WindowId; label: string; Icon: LucideIcon }[] = [
   { id: "board", label: "Board.exe", Icon: LayoutGrid },
   { id: "market", label: "Market.exe", Icon: Store },
   { id: "story", label: "Story.exe", Icon: BookOpen },
-  { id: "whitepaper", label: "Readme.txt", Icon: FileText },
+  { id: "whitepaper", label: "Whitepaper", Icon: FileText },
   { id: "roadmap", label: "Roadmap.exe", Icon: Map },
 ];
 

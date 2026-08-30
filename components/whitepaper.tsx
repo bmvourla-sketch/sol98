@@ -53,16 +53,16 @@ EXECUTIVE SUMMARY
 
 ================================================================================
 
-3. THE 10% TIPPING POINT  (PUMP.FUN LAUNCH)
+3. THE 100TH SALE  (PUMP.FUN LAUNCH)
 
-    When 1,000 spots (10% of the board) are sold, the token launches:
+    When the 100th spot is sold, the token launches:
 
       1. The full 10,000,000 $PIXEL98 supply is minted on Pump.fun.
       2. 100% is airdropped to spot owners, proportional to spot count.
       3. The liquidity pool opens on Pump.fun.
 
-    Reaching 10% is the collective "block-holder" milestone: the
-    first 1,000 buyers become the founding token distribution.
+    Reaching 100 sales is the collective "block-holder" milestone:
+    the first 100 buyers become the founding token distribution.
 
 ================================================================================
 
@@ -124,8 +124,8 @@ EXECUTIVE SUMMARY
 
 ================================================================================
 
-NOTE: The token ($PIXEL98) launches on Pump.fun once 10% of the
-board is filled. Nothing in this document is financial advice.
+NOTE: The token ($PIXEL98) launches on Pump.fun once the 100th
+spot is sold. Nothing in this document is financial advice.
 `;
 
 export function Whitepaper() {

@@ -21,8 +21,8 @@ describe("$PIXEL98 token model", () => {
     expect(airdropFor(3)).toBe(3000);
   });
 
-  it("launch target is 10% of the board", () => {
-    expect(LAUNCH_TARGET_SPOTS).toBe(1000);
+  it("launch target is the 100th sale", () => {
+    expect(LAUNCH_TARGET_SPOTS).toBe(100);
     expect(PIXEL98_PER_SOL).toBe(1000);
     expect(AIRDROP_PER_SPOT).toBe(1000);
   });

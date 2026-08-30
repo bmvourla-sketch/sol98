@@ -9,7 +9,7 @@ PHASE 1 — BOOT SEQUENCE
     - PWA install ("Install SOL-98")
 
 PHASE 2 — BLUE SCREEN OF FOMO
-    - Reach 1,000 spots sold (10% of board)
+    - Reach 100 spots sold (100th sale)
     - Launch $PIXEL98 on Pump.fun
     - Airdrop to pixel owners (proportional to spots)
     - Pixel Hijack goes live (real token burn)

@@ -235,15 +235,14 @@ body {
    --------------------------------------------------------------------------- */
 .pixel-board-grid {
   display: grid;
-  grid-template-columns: repeat(100, 10px);
-  grid-template-rows: repeat(100, 10px);
-  width: max-content;
+  grid-template-columns: repeat(100, 1fr);
+  grid-template-rows: repeat(100, 1fr);
+  aspect-ratio: 1 / 1;
+  width: 100%;
   background-color: #fff;
 }
 
 .pixel-cell {
-  width: 10px;
-  height: 10px;
   margin: 0;
   padding: 0;
   border: none;

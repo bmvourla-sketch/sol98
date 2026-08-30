@@ -58,7 +58,7 @@ export function SolanaConnectButton() {
       </button>
 
       {open && !connected && (
-        <div className="win98-menu absolute bottom-full right-0 mb-1 w-56 py-1">
+        <div className="win98-menu absolute top-full right-0 mt-1 w-56 py-1">
           {wallets.length === 0 && (
             <div className="px-3 py-2 text-[11px] leading-snug">
               No wallet detected.

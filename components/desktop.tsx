@@ -43,7 +43,7 @@ const WINDOWS: Record<WindowId, WinDef> = {
     size: { width: 480, height: 420 },
   },
   whitepaper: {
-    title: "Readme.txt",
+    title: "Whitepaper",
     Component: Whitepaper,
     pos: { x: 190, y: 120 },
     size: { width: 540, height: 540 },
@@ -103,26 +103,12 @@ export default function Desktop() {
     <PixelProvider>
       <DocumentProvider>
         <div className="flex h-screen flex-col overflow-hidden">
-          {/* Top bar — wallet (right) + whitepaper */}
-          <div
-            className="flex items-center justify-between bg-[#c0c0c0] px-2 py-1"
-            style={{ borderBottom: "2px solid #808080", borderTop: "2px solid #dfdfdf" }}
-          >
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold">SOL-98</span>
-              <button
-                type="button"
-                className="win98-button !px-2 !py-0 text-[11px]"
-                onClick={() => openWindow("whitepaper")}
-              >
-                Whitepaper
-              </button>
-            </div>
-            <SolanaConnectButton />
-          </div>
-
-          {/* Green scrollable desktop = the pixel board */}
+          {/* Green desktop = the pixel board */}
           <div className="relative flex-1 overflow-hidden">
+            {/* Floating wallet (top-right, no bar) */}
+            <div className="absolute right-2 top-2 z-20">
+              <SolanaConnectButton />
+            </div>
             <div className="h-full overflow-auto bg-[#008080]">
               <PixelBoard />
             </div>
