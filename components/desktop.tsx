@@ -2,10 +2,13 @@
 
 import { useCallback, useState } from "react";
 
+import { DocumentProvider } from "@/lib/document-store";
 import { PixelProvider } from "@/lib/pixel-store";
+import { DocumentSale } from "./document-sale";
 import { Market } from "./market";
 import { PixelBoard } from "./pixel-board";
 import { Roadmap } from "./roadmap";
+import { SolanaConnectButton } from "./solana-connect-button";
 import { Story } from "./story";
 import { Taskbar } from "./taskbar";
 import { Whitepaper } from "./whitepaper";
@@ -23,9 +26,9 @@ interface WinDef {
 const WINDOWS: Record<WindowId, WinDef> = {
   board: {
     title: "Board.exe",
-    Component: PixelBoard,
-    pos: { x: 20, y: 16 },
-    size: { width: 720, height: 760 },
+    Component: DocumentSale,
+    pos: { x: 60, y: 40 },
+    size: { width: 560, height: 480 },
   },
   market: {
     title: "Market.exe",
@@ -54,10 +57,11 @@ const WINDOWS: Record<WindowId, WinDef> = {
 };
 
 export default function Desktop() {
-  // `order` is also the z-order: the last item is the topmost window.
-  const [order, setOrder] = useState<WindowId[]>(["board"]);
+  // `order` is also the z-order: the last item is the topmost window. Starts
+  // empty — the pixel board is the desktop itself, and windows open on demand.
+  const [order, setOrder] = useState<WindowId[]>([]);
   const [minimized, setMinimized] = useState<Partial<Record<WindowId, boolean>>>({});
-  const [active, setActive] = useState<WindowId | null>("board");
+  const [active, setActive] = useState<WindowId | null>(null);
   const [startOpen, setStartOpen] = useState(false);
 
   const openWindow = useCallback((id: WindowId) => {
@@ -97,52 +101,65 @@ export default function Desktop() {
 
   return (
     <PixelProvider>
-      <div className="flex h-screen flex-col overflow-hidden">
-        <div className="relative flex-1">
-          {/* Top-right quick access (clean desktop) */}
-          <div className="absolute right-2 top-2 z-0 flex gap-1">
-            <button type="button" className="win98-button" onClick={() => openWindow("whitepaper")}>
-              Whitepaper
-            </button>
-            <button type="button" className="win98-button" onClick={() => openWindow("story")}>
-              Story
-            </button>
-            <button type="button" className="win98-button" onClick={() => openWindow("roadmap")}>
-              Roadmap
-            </button>
+      <DocumentProvider>
+        <div className="flex h-screen flex-col overflow-hidden">
+          {/* Top bar — wallet (right) + whitepaper */}
+          <div
+            className="flex items-center justify-between bg-[#c0c0c0] px-2 py-1"
+            style={{ borderBottom: "2px solid #808080", borderTop: "2px solid #dfdfdf" }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold">SOL-98</span>
+              <button
+                type="button"
+                className="win98-button !px-2 !py-0 text-[11px]"
+                onClick={() => openWindow("whitepaper")}
+              >
+                Whitepaper
+              </button>
+            </div>
+            <SolanaConnectButton />
           </div>
 
-          {/* Windows (z-order = array order) */}
-          {order.map((id, i) => {
-            if (minimized[id]) return null;
-            const def = WINDOWS[id];
-            const Comp = def.Component;
-            return (
-              <Window
-                key={id}
-                title={def.title}
-                active={active === id}
-                zIndex={10 + i}
-                initialPos={def.pos}
-                size={def.size}
-                onFocus={() => focusWindow(id)}
-                onClose={() => closeWindow(id)}
-                onMinimize={() => minimizeWindow(id)}
-              >
-                <Comp />
-              </Window>
-            );
-          })}
-        </div>
+          {/* Green scrollable desktop = the pixel board */}
+          <div className="relative flex-1 overflow-hidden">
+            <div className="h-full overflow-auto bg-[#008080]">
+              <PixelBoard />
+            </div>
 
-        <Taskbar
-          windows={taskbarWindows}
-          startOpen={startOpen}
-          onStartToggle={() => setStartOpen((o) => !o)}
-          onOpenWindow={openWindow}
-          onWindowClick={(id) => (minimized[id] ? openWindow(id) : focusWindow(id))}
-        />
-      </div>
+            {/* Floating windows (draggable) */}
+            {order.map((id, i) => {
+              if (minimized[id]) return null;
+              const def = WINDOWS[id];
+              const Comp = def.Component;
+              return (
+                <Window
+                  key={id}
+                  title={def.title}
+                  active={active === id}
+                  zIndex={10 + i}
+                  initialPos={def.pos}
+                  size={def.size}
+                  onFocus={() => focusWindow(id)}
+                  onClose={() => closeWindow(id)}
+                  onMinimize={() => minimizeWindow(id)}
+                >
+                  <Comp />
+                </Window>
+              );
+            })}
+          </div>
+
+          {/* Bottom taskbar */}
+          <Taskbar
+            windows={taskbarWindows}
+            startOpen={startOpen}
+            onStartToggle={() => setStartOpen((o) => !o)}
+            onOpenWindow={openWindow}
+            onWindowClick={(id) => (minimized[id] ? openWindow(id) : focusWindow(id))}
+          />
+        </div>
+      </DocumentProvider>
     </PixelProvider>
   );
 }
