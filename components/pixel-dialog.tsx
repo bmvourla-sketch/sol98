@@ -56,6 +56,8 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
     soldCount,
     nextPriceSol,
     pixel98Balance,
+    sol98Balance,
+    spendSol98,
     buyPixel,
     buyArea,
     hijackPixel,
@@ -75,6 +77,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
   const [message, setMessage] = useState(pixel?.message ?? "");
   const [neon, setNeon] = useState<NeonTemplate>(pixel?.neon ?? "none");
   const [sellPrice, setSellPrice] = useState("");
+  const [payWith, setPayWith] = useState<"sol" | "sol98">("sol");
   const [txStatus, setTxStatus] = useState<TxStatus>("idle");
   const [alert, setAlert] = useState<AlertState | null>(null);
 
@@ -114,16 +117,32 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
       setAlert({ kind: "error", title: "Wallet", message: "Connect your wallet first (top-right)." });
       return;
     }
+    const ad = {
+      destination: destination.trim(),
+      imageUrl: imageUrl.trim(),
+      message: message.trim(),
+      neon,
+    };
+    if (payWith === "sol98") {
+      const cost = Math.ceil(price * 1000); // 1 SOL = 1000 SOL98
+      if (!spendSol98(cost)) {
+        showError("Payment Failed", "Not enough SOL98 balance.");
+        return;
+      }
+      setTxStatus("success");
+      if (multi) buyArea(indices, owner, ad, soldCount);
+      else buyPixel(index, owner, ad);
+      setAlert({
+        kind: "success",
+        title: multi ? "Area Purchased" : "Purchase Complete",
+        message: `${multi ? `${indices.length} blocks` : `Pixel #${index + 1}`} is yours (paid with SOL98).`,
+      });
+      return;
+    }
     setTxStatus("awaiting_signature");
     try {
       const signature = await sendSol(price, () => setTxStatus("processing"));
       setTxStatus("success");
-      const ad = {
-        destination: destination.trim(),
-        imageUrl: imageUrl.trim(),
-        message: message.trim(),
-        neon,
-      };
       if (multi) buyArea(indices, owner, ad, soldCount);
       else buyPixel(index, owner, ad);
       setAlert({
@@ -208,6 +227,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
 
         <div className="flex max-h-[72vh] flex-col gap-2 overflow-auto p-3">
           {mode === "buy" && (
+            <>
             <div className="bevel-in px-2 py-1 text-xs">
               {multi ? (
                 <span>
@@ -220,6 +240,11 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
               Total: <b>{formatSol(price)} SOL</b>
               <span className="text-[#808080]"> (bonding curve)</span>
             </div>
+            <div className="flex gap-1">
+              <button type="button" className="win98-button flex-1 !px-1 !py-1 text-[11px]" style={payWith === "sol" ? { background: "#000080", color: "#fff" } : undefined} onClick={() => setPayWith("sol")}>Pay with SOL</button>
+              <button type="button" className="win98-button flex-1 !px-1 !py-1 text-[11px]" style={payWith === "sol98" ? { background: "#000080", color: "#fff" } : undefined} onClick={() => setPayWith("sol98")}>Pay with SOL98 ({sol98Balance})</button>
+            </div>
+            </>
           )}
 
           {mode === "hijack" && pixel && (

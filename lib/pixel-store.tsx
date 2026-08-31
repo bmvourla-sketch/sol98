@@ -52,6 +52,9 @@ interface PixelContextValue {
   totalRaisedSol: number;
   firstFreeIndex: number;
   pixel98Balance: number;
+  sol98Balance: number;
+  spendSol98: (amount: number) => boolean;
+  claimSol98: (amount: number) => void;
   syncState: SyncState;
   buyPixel: (index: number, owner: string, ad: AdContent) => void;
   /** Buy a rectangular area of blocks as ONE banner (bigger area = bigger ad). */
@@ -110,6 +113,7 @@ function u8ToBase64(u8: Uint8Array): string {
 export function PixelProvider({ children }: { children: ReactNode }) {
   const [pixels, setPixels] = useState<Record<number, PixelData>>({});
   const [balance, setBalance] = useState(0);
+  const [sol98Balance, setSol98Balance] = useState(100000);
   const [syncState, setSyncState] = useState<SyncState>("loading");
   const signerRef = useRef<((msg: Uint8Array) => Promise<Uint8Array>) | null>(null);
 
@@ -370,6 +374,16 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     setBalance((prev) => prev + amount);
   }, []);
 
+  const spendSol98 = useCallback((amount: number): boolean => {
+    if (sol98Balance < amount) return false;
+    setSol98Balance((prev) => prev - amount);
+    return true;
+  }, [sol98Balance]);
+
+  const claimSol98 = useCallback((amount: number) => {
+    setSol98Balance((prev) => prev + amount);
+  }, []);
+
   const soldCount = Object.keys(pixels).length;
 
   const firstFreeIndex = useMemo(() => {
@@ -404,6 +418,9 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       totalRaisedSol: totalRaisedSol(soldCount),
       firstFreeIndex,
       pixel98Balance: balance,
+      sol98Balance,
+      spendSol98,
+      claimSol98,
       syncState,
       buyPixel,
       buyArea,
@@ -425,6 +442,9 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       soldCount,
       firstFreeIndex,
       balance,
+      sol98Balance,
+      spendSol98,
+      claimSol98,
       syncState,
       buyPixel,
       buyArea,
