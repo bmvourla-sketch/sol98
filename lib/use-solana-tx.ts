@@ -6,13 +6,31 @@ import { getMint } from "@solana/spl-token";
 import { PublicKey } from "@solana/web3.js";
 
 import { buildHijackTransaction, buildTransferTransaction } from "./purchase";
-import { PIXEL98_MINT, getTreasuryPublicKey } from "./solana";
+import { PIXEL98_MINT, getSolanaRpcEndpoint, getTreasuryPublicKey } from "./solana";
 import { buildAuthMessage } from "./auth-message";
 import { bytesToBase64 } from "./bytes";
 
 export interface TxOutcome {
   signature: string;
   simulated: boolean;
+}
+
+/**
+ * Maps raw wallet errors to actionable messages. Phantom/Solflare raise a
+ * "Network mismatch" error when the wallet's cluster differs from the app's —
+ * a common, confusing failure — so we translate it into a clear instruction
+ * (and name the app's cluster) instead of leaking the raw text.
+ */
+function friendlyTxError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/network mismatch/i.test(message) || /network is set to/i.test(message)) {
+    const cluster = /devnet/i.test(getSolanaRpcEndpoint()) ? "devnet" : "mainnet";
+    return new Error(
+      `Network mismatch — this app runs on Solana ${cluster}, but your wallet is on a different network. ` +
+        `Switch your wallet to ${cluster} in its settings, then try again.`
+    );
+  }
+  return error instanceof Error ? error : new Error(message);
 }
 
 /**
@@ -40,7 +58,12 @@ export function useSendSolTransfer() {
       tx.feePayer = publicKey;
 
       // The wallet extension signs here — user approves/rejects in the popup.
-      const signature = await sendTransaction(tx, connection);
+      let signature: string;
+      try {
+        signature = await sendTransaction(tx, connection);
+      } catch (error) {
+        throw friendlyTxError(error);
+      }
       onSigned?.(signature);
 
       const result = await connection.confirmTransaction({
@@ -98,7 +121,12 @@ export function useHijackBurn() {
       tx.recentBlockhash = blockhash;
       tx.feePayer = publicKey;
 
-      const signature = await sendTransaction(tx, connection);
+      let signature: string;
+      try {
+        signature = await sendTransaction(tx, connection);
+      } catch (error) {
+        throw friendlyTxError(error);
+      }
       onSigned?.(signature);
 
       const result = await connection.confirmTransaction({
