@@ -237,6 +237,7 @@ body {
   display: grid;
   width: max-content;
   background-color: #fff;
+  touch-action: none; /* tap/drag selects cells instead of scrolling */
 }
 
 .pixel-cell {
@@ -246,6 +247,8 @@ body {
   background-color: #ffffff;
   position: relative;
   cursor: pointer;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .pixel-cell:nth-child(2n) {
@@ -443,4 +446,12 @@ body {
   background-image: linear-gradient(135deg, transparent 0 50%, #808080 50% 62%, transparent 62% 100%),
     linear-gradient(135deg, transparent 0 30%, #808080 30% 42%, transparent 42% 100%),
     linear-gradient(135deg, transparent 0 10%, #808080 10% 22%, transparent 22% 100%);
+}
+
+/* Mobile & touch adjustments. */
+@media (max-width: 640px) {
+  .win98-taskbar { height: 40px; }
+  .tray-social { display: none; }
+  .win98-taskbar-button { padding: 0 8px; font-size: 11px; }
+  .win98-menu-item { padding: 8px 12px; }
 }

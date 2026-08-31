@@ -5,7 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { X } from "lucide-react";
 
 import { usePixels, type NeonTemplate } from "@/lib/pixel-store";
-import { areaPrice, BOARD_SIZE, formatSol } from "@/lib/pricing";
+import { areaPrice, BOARD_SIZE, bulkPriceBreakdown, formatSol } from "@/lib/pricing";
 import { hijackCostInTokens, TOKEN_SYMBOL } from "@/lib/token";
 import { isTokenLive, shortenAddress } from "@/lib/solana";
 import { useBurnPixel98, useSendSolTransfer } from "@/lib/use-solana-tx";
@@ -217,7 +217,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
 
   return (
     <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/25 p-3">
-      <div className="win98-window bevel-out w-[360px]">
+      <div className="win98-window bevel-out w-[min(360px,calc(100vw-1.5rem))]">
         <div className="win98-titlebar">
           <span className="flex-1 truncate text-[12px]">{title}</span>
           <button type="button" className="win98-title-button" onClick={onClose} aria-label="Close">
@@ -231,14 +231,23 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
             <div className="bevel-in px-2 py-1 text-xs">
               {multi ? (
                 <span>
-                  Area: {areaCols}×{areaRows} = {indices.length} blocks @{" "}
-                  {formatSol(nextPriceSol)} each (fixed price) ·{" "}
+                  Area: {areaCols}×{areaRows} = {indices.length} blocks ·{" "}
                 </span>
               ) : (
                 <span>Single block (10×10 px) · </span>
               )}
               Total: <b>{formatSol(price)} SOL</b>
-              <span className="text-[#808080]"> (bonding curve)</span>
+              {multi && (
+                <div className="mt-1 text-[#808080]">
+                  {bulkPriceBreakdown(soldCount, indices.length).map((t) => (
+                    <div key={t.from}>
+                      {t.from}{t.count > 1 ? `–${t.to}` : ""} blocks · {t.count} × {formatSol(t.unitPrice)} ={" "}
+                      {formatSol(t.subtotal)} SOL
+                    </div>
+                  ))}
+                </div>
+              )}
+              <span className="text-[#808080]"> (steps +10% every 10 blocks)</span>
             </div>
             <div className="flex gap-1">
               <button type="button" className="win98-button flex-1 !px-1 !py-1 text-[11px]" style={payWith === "sol" ? { background: "#000080", color: "#fff" } : undefined} onClick={() => setPayWith("sol")}>Pay with SOL</button>

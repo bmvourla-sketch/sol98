@@ -45,7 +45,7 @@ export function useSendSolTransfer() {
       }
       return signature;
     },
-    [publicKey, sendTransaction, connection]
+    [publicKey, sendTransaction, connection, connected]
   );
 }
 
@@ -89,6 +89,6 @@ export function useBurnPixel98() {
       }
       return { signature, simulated: false };
     },
-    [publicKey, sendTransaction, connection]
+    [publicKey, sendTransaction, connection, connected]
   );
 }

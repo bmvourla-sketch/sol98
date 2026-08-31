@@ -35,10 +35,12 @@ EXECUTIVE SUMMARY
 
     price(N) = 0.2 * 1.10^(N-1)          (N is 1-indexed)
 
-    Every PURCHASE raises the next price by 10%. Within a single
-    purchase every block is sold at the SAME fixed price (bulk buys do
-    not compound per block); the price steps up only AFTER the purchase
-    completes.
+    Every PURCHASE raises the next price by 10%. Within a single bulk
+    purchase the price ALSO steps up +10% every 10 blocks, so a huge
+    area can't be bought entirely at the flat starting price: blocks
+    1-10 cost the current price, blocks 11-20 cost +10%, blocks 21-30
+    cost +20%, and so on. The price steps up once more after the whole
+    purchase completes.
 
     Examples:
       block #1     0.2000 SOL
@@ -107,8 +109,9 @@ EXECUTIVE SUMMARY
     - SOL: a real SystemProgram.transfer to the treasury.
     - SOL98: pay the SOL-equivalent in SOL98 (1 SOL = 1,000 SOL98).
 
-    Every board write is signed by the owner's wallet and verified
-    server-side (ed25519) — spoofing an owner is not possible.
+    Ownership is tied to the buyer's wallet: a block is purchased with
+    a real, wallet-signed SOL transfer (SystemProgram.transfer to the
+    treasury), and the board records the paying wallet as the owner.
 
 ================================================================================
 

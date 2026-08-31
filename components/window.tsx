@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Minus, Square, X } from "lucide-react";
 
 interface WindowProps {
@@ -34,6 +34,20 @@ export function Window({
   const [pos, setPos] = useState(initialPos);
   const [size, setSize] = useState(initialSize);
   const [maximized, setMaximized] = useState(false);
+
+  // Fit windows that would overflow the viewport (phones/tablets).
+  useEffect(() => {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const width = Math.max(240, Math.min(initialSize.width, vw - 12));
+    const height = Math.max(160, Math.min(initialSize.height, vh - 48));
+    setSize({ width, height });
+    setPos({
+      x: Math.max(4, Math.min(initialPos.x, vw - width - 4)),
+      y: Math.max(4, Math.min(initialPos.y, vh - height - 40)),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function startDrag(event: React.PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
@@ -71,8 +85,8 @@ export function Window({
 
     const onMove = (ev: PointerEvent) =>
       setSize({
-        width: Math.max(320, origW + ev.clientX - startX),
-        height: Math.max(200, origH + ev.clientY - startY),
+        width: Math.max(240, origW + ev.clientX - startX),
+        height: Math.max(160, origH + ev.clientY - startY),
       });
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);

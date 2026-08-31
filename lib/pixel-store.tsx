@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { BOARD_SIZE, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
+import { BOARD_SIZE, bulkBlockPrice, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
 import { airdropFor, HIJACK_VALUATION_DECAY } from "./token";
 
 export type NeonTemplate = "none" | "cyberpunk-pulse" | "matrix" | "flashing" | "glitch" | "rainbow" | "sequential";
@@ -179,7 +179,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
             imageUrl: ad.imageUrl,
             message: ad.message,
             neon: ad.neon,
-            valuationSol: nextSpotPrice(base),
+            valuationSol: bulkBlockPrice(base, k),
             purchasedAt: Date.now(),
             isRented: false,
             bannerGroupId: groupId,
@@ -200,7 +200,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
           imageUrl: ad.imageUrl,
           message: ad.message,
           neon: ad.neon,
-          valuationSol: nextSpotPrice(base),
+          valuationSol: bulkBlockPrice(base, k),
           purchasedAt: Date.now(),
           isRented: false,
           bannerGroupId: groupId,

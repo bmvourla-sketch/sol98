@@ -114,7 +114,7 @@ export default function Desktop() {
           {/* Green desktop = the pixel board */}
           <div className="relative flex-1 overflow-hidden">
             {/* Floating wallet + zoom (top-right, no bar) */}
-            <div className="absolute right-2 top-2 z-20 flex items-center gap-1">
+            <div className="absolute right-2 top-2 z-20 flex max-w-[calc(100vw-1rem)] flex-wrap items-center justify-end gap-1">
               <button type="button" className="win98-button !px-2 !py-0 text-[11px]" onClick={() => setZoom((z) => Math.max(0.2, z / 1.5))}>−</button>
               <span className="w-10 text-center text-[11px] text-white">{Math.round(zoom * 100)}%</span>
               <button type="button" className="win98-button !px-2 !py-0 text-[11px]" onClick={() => setZoom((z) => Math.min(8, z * 1.5))}>+</button>

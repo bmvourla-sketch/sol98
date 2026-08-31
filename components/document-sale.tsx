@@ -95,7 +95,7 @@ export function DocumentSale() {
       {/* Buy dialog */}
       {buyOpen && (
         <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/25 p-3">
-          <div className="win98-window bevel-out w-[360px]">
+          <div className="win98-window bevel-out w-[min(360px,calc(100vw-1.5rem))]">
             <div className="win98-titlebar">
               <span className="flex-1 truncate text-[12px]">Buy Document</span>
               <button type="button" className="win98-title-button" onClick={() => setBuyOpen(false)} aria-label="Close">
@@ -130,7 +130,7 @@ export function DocumentSale() {
       {/* View dialog (notepad) */}
       {viewDoc && (
         <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/25 p-3">
-          <div className="win98-window bevel-out w-[420px]">
+          <div className="win98-window bevel-out w-[min(420px,calc(100vw-1.5rem))]">
             <div className="win98-titlebar">
               <span className="flex-1 truncate text-[12px]">{viewDoc.name}</span>
               <button type="button" className="win98-title-button" onClick={() => setViewDoc(null)} aria-label="Close">

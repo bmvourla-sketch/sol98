@@ -11,7 +11,7 @@ PHASE 1 — BOOT SEQUENCE   [SHIPPED]
     [x] Clickable ads (click → redirect to destination link)
     [x] SOL + SOL98 payments
     [x] PWA install + offline service worker
-    [x] Wallet-signed board writes (ed25519 verified server-side)
+    [x] On-chain purchases (wallet-signed SOL transfer)
 
 PHASE 2 — BLUE SCREEN OF FOMO
     [ ] Reach the 100th sale
