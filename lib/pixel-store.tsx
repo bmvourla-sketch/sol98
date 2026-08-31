@@ -43,6 +43,13 @@ export interface PixelData extends AdContent {
 
 export type SyncState = "loading" | "live" | "offline";
 
+/** Proof for a board write: a verified transfer signature (SOL buy) or an
+ *  explicit `mock` flag (SOL98, simulated hijack burn, market actions). */
+export interface WriteProof {
+  signature?: string;
+  mock?: boolean;
+}
+
 interface PixelContextValue {
   pixels: Record<number, PixelData>;
   soldCount: number;
@@ -54,9 +61,9 @@ interface PixelContextValue {
   spendSol98: (amount: number) => boolean;
   claimSol98: (amount: number) => void;
   syncState: SyncState;
-  buyPixel: (index: number, owner: string, ad: AdContent) => void;
+  buyPixel: (index: number, owner: string, ad: AdContent, proof?: WriteProof) => void;
   /** Buy a rectangular area of blocks as ONE banner (bigger area = bigger ad). */
-  buyArea: (indices: number[], owner: string, ad: AdContent, baseOverride?: number) => void;
+  buyArea: (indices: number[], owner: string, ad: AdContent, baseOverride?: number, proof?: WriteProof) => void;
   /** Overtake a spot after a (real or simulated) burn. False if the spot vanished. */
   hijackPixel: (index: number, hijacker: string) => boolean;
   /** Deduct the mock $PIXEL98 balance (simulated-burn path only). */
@@ -137,12 +144,16 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   useEffect(() => save(PIXEL_CACHE_KEY, pixels), [pixels]);
   useEffect(() => save(BALANCE_STORAGE_KEY, balance), [balance]);
 
-  const syncPixel = useCallback(async (pixel: PixelData) => {
+  const syncPixel = useCallback(async (pixel: PixelData, proof?: WriteProof) => {
     try {
       await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pixel }),
+        body: JSON.stringify({
+          pixel,
+          signature: proof?.signature ?? null,
+          mock: proof?.mock ?? false,
+        }),
       });
     } catch {
       // offline — stays in the local cache until the next successful fetch
@@ -150,15 +161,15 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const upsert = useCallback(
-    (pixel: PixelData) => {
+    (pixel: PixelData, proof?: WriteProof) => {
       setPixels((prev) => ({ ...prev, [pixel.index]: pixel }));
-      void syncPixel(pixel);
+      void syncPixel(pixel, proof);
     },
     [syncPixel]
   );
 
   const buyArea = useCallback(
-    (indices: number[], owner: string, ad: AdContent, baseOverride?: number) => {
+    (indices: number[], owner: string, ad: AdContent, baseOverride?: number, proof?: WriteProof) => {
       const base = baseOverride ?? Object.keys(pixels).length;
       const groupId = `b-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 
@@ -193,30 +204,33 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       });
 
       indices.forEach((index, k) => {
-        void syncPixel({
-          index,
-          owner,
-          destination: ad.destination,
-          imageUrl: ad.imageUrl,
-          message: ad.message,
-          neon: ad.neon,
-          valuationSol: bulkBlockPrice(base, k),
-          purchasedAt: Date.now(),
-          isRented: false,
-          bannerGroupId: groupId,
-          bannerCols,
-          bannerRows,
-          bannerX: (index % BOARD_SIZE) - minCol,
-          bannerY: Math.floor(index / BOARD_SIZE) - minRow,
-        });
+        void syncPixel(
+          {
+            index,
+            owner,
+            destination: ad.destination,
+            imageUrl: ad.imageUrl,
+            message: ad.message,
+            neon: ad.neon,
+            valuationSol: bulkBlockPrice(base, k),
+            purchasedAt: Date.now(),
+            isRented: false,
+            bannerGroupId: groupId,
+            bannerCols,
+            bannerRows,
+            bannerX: (index % BOARD_SIZE) - minCol,
+            bannerY: Math.floor(index / BOARD_SIZE) - minRow,
+          },
+          proof
+        );
       });
     },
     [pixels, syncPixel]
   );
 
   const buyPixel = useCallback(
-    (index: number, owner: string, ad: AdContent) => {
-      buyArea([index], owner, ad);
+    (index: number, owner: string, ad: AdContent, proof?: WriteProof) => {
+      buyArea([index], owner, ad, undefined, proof);
     },
     [buyArea]
   );
@@ -225,26 +239,29 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     (index: number, hijacker: string): boolean => {
       const target = pixels[index];
       if (!target) return false;
-      upsert({
-        ...target,
-        owner: hijacker,
-        valuationSol: target.valuationSol * (1 - HIJACK_VALUATION_DECAY),
-        destination: "",
-        imageUrl: "",
-        message: "",
-        neon: "none",
-        purchasedAt: Date.now(),
-        isRented: false,
-        rentedTo: undefined,
-        rentedUntil: undefined,
-        listingPriceSol: undefined,
-        rentPriceSol: undefined,
-        bannerGroupId: undefined,
-        bannerCols: undefined,
-        bannerRows: undefined,
-        bannerX: undefined,
-        bannerY: undefined,
-      });
+      upsert(
+        {
+          ...target,
+          owner: hijacker,
+          valuationSol: target.valuationSol * (1 - HIJACK_VALUATION_DECAY),
+          destination: "",
+          imageUrl: "",
+          message: "",
+          neon: "none",
+          purchasedAt: Date.now(),
+          isRented: false,
+          rentedTo: undefined,
+          rentedUntil: undefined,
+          listingPriceSol: undefined,
+          rentPriceSol: undefined,
+          bannerGroupId: undefined,
+          bannerCols: undefined,
+          bannerRows: undefined,
+          bannerX: undefined,
+          bannerY: undefined,
+        },
+        { mock: true }
+      );
       return true;
     },
     [pixels, upsert]
@@ -300,19 +317,22 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     (index: number, buyer: string) => {
       const cur = pixels[index];
       if (!cur) return;
-      upsert({
-        ...cur,
-        owner: buyer,
-        destination: "",
-        imageUrl: "",
-        message: "",
-        neon: "none",
-        purchasedAt: Date.now(),
-        isRented: false,
-        listingPriceSol: undefined,
-        rentPriceSol: undefined,
-        valuationSol: cur.listingPriceSol ?? cur.valuationSol,
-      });
+      upsert(
+        {
+          ...cur,
+          owner: buyer,
+          destination: "",
+          imageUrl: "",
+          message: "",
+          neon: "none",
+          purchasedAt: Date.now(),
+          isRented: false,
+          listingPriceSol: undefined,
+          rentPriceSol: undefined,
+          valuationSol: cur.listingPriceSol ?? cur.valuationSol,
+        },
+        { mock: true }
+      );
     },
     [pixels, upsert]
   );

@@ -130,8 +130,8 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
         return;
       }
       setTxStatus("success");
-      if (multi) buyArea(indices, owner, ad, soldCount);
-      else buyPixel(index, owner, ad);
+      if (multi) buyArea(indices, owner, ad, soldCount, { mock: true });
+      else buyPixel(index, owner, ad, { mock: true });
       setAlert({
         kind: "success",
         title: multi ? "Area Purchased" : "Purchase Complete",
@@ -143,8 +143,8 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
     try {
       const signature = await sendSol(price, () => setTxStatus("processing"));
       setTxStatus("success");
-      if (multi) buyArea(indices, owner, ad, soldCount);
-      else buyPixel(index, owner, ad);
+      if (multi) buyArea(indices, owner, ad, soldCount, { signature });
+      else buyPixel(index, owner, ad, { signature });
       setAlert({
         kind: "success",
         title: multi ? "Area Purchased" : "Purchase Complete",
