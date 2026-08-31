@@ -12,7 +12,7 @@ import {
   type BoardPixel,
 } from "@/lib/board-types";
 import { formatSol } from "@/lib/pricing";
-import { shortenAddress } from "@/lib/solana";
+import { isTokenLive, shortenAddress } from "@/lib/solana";
 import type { NeonTemplate } from "@/lib/pixel-types";
 import { Win98Alert } from "./win98-alert";
 
@@ -304,8 +304,13 @@ function SubBlockDialog({
           {!isOwner && (
             <>
               <button type="button" className="win98-button" disabled={busy} onClick={() => run(() => hijackPixel(boardId, index), "Hijacked — valuation −5%.")}>
-                {busy ? "Hijacking…" : "Hijack (burn)"}
+                {busy ? "Hijacking…" : isTokenLive() ? "Hijack (burn)" : "Hijack (simulated, free)"}
               </button>
+              {!isTokenLive() && (
+                <div className="text-[11px] text-[#808080]">
+                  $PIXEL98 not live yet — free, wallet-signed, rate-limited simulated hijack. Real burns activate after launch.
+                </div>
+              )}
               {pixel?.listingPriceSol !== undefined && (
                 <button type="button" className="win98-button" disabled={busy} onClick={() => run(() => buyListing(boardId, index), "Purchased.")}>
                   Buy — {formatSol(pixel.listingPriceSol)} SOL

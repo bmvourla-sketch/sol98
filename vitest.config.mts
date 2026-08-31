@@ -7,6 +7,9 @@ const dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
+    // Tests share the on-disk `data/` store (each deletes it in freshStore()),
+    // so run files sequentially to avoid cross-file write races.
+    fileParallelism: false,
   },
   resolve: {
     alias: {

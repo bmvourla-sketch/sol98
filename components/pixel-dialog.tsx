@@ -151,10 +151,9 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
   }
 
   async function handleHijack() {
-    if (!tokenLive) {
-      setAlert({ kind: "error", title: "Coming Soon", message: "Real hijack burns activate after the $PIXEL98 Pump.fun launch." });
-      return;
-    }
+    // Pre-launch this is the documented FREE "simulated" hijack (wallet-signed,
+    // rate-limited, no token required) — only the real on-chain burn requires
+    // $PIXEL98 to be live, and that branch is chosen server-side/in usePixels().
     if (!connected || !publicKey) {
       setAlert({ kind: "error", title: "Wallet", message: "Connect your wallet first (top-right)." });
       return;
@@ -267,7 +266,8 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
               <span className="text-[#808080]">Hijack → valuation −5%</span>
               {!tokenLive && (
                 <span className="text-[#800000]">
-                  Coming Soon — $PIXEL98 not live yet. Simulated hijacks are free but wallet-signed and rate-limited.
+                  $PIXEL98 not live yet — this hijack is FREE and SIMULATED: wallet-signed proof of
+                  ownership, rate-limited, no tokens burned. Real burns activate after launch.
                 </span>
               )}
             </div>
@@ -329,8 +329,18 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
               </button>
             )}
             {mode === "hijack" && (
-              <button type="button" className="win98-button" onClick={handleHijack} disabled={busy || !tokenLive}>
-                {!tokenLive ? "Coming Soon" : txStatus === "awaiting_signature" ? "Confirm burn…" : txStatus === "processing" ? "Burning…" : `Hijack (${hijackCost})`}
+              <button type="button" className="win98-button" onClick={handleHijack} disabled={busy}>
+                {txStatus === "awaiting_signature"
+                  ? tokenLive
+                    ? "Confirm burn…"
+                    : "Confirm signature…"
+                  : txStatus === "processing"
+                    ? tokenLive
+                      ? "Burning…"
+                      : "Hijacking…"
+                    : tokenLive
+                      ? `Hijack (${hijackCost})`
+                      : "Hijack (simulated, free)"}
               </button>
             )}
             {mode === "manage" && (
