@@ -12,11 +12,12 @@ import {
 } from "@/lib/server/pixel-db";
 import { claimSignature, releaseSignature } from "@/lib/server/used-signatures";
 import { verifyAuthProof } from "@/lib/server/verify-message";
-import { solRequiredLamportsWithTolerance, tokenAmountToRaw, verifyBurn, verifySolTransfer } from "@/lib/server/verify-tx";
+import { solRequiredLamportsWithTolerance, tokenAmountToRaw, verifyBurn, verifySolTransfer, verifyTokenTransfer } from "@/lib/server/verify-tx";
+import { getBurnedFraction } from "@/lib/server/token-stats";
 import { isRateLimited, requestIp } from "@/lib/server/rate-limit";
 import { createMutex } from "@/lib/server/mutex";
 import { areaPrice, BOARD_SIZE, nextSpotPrice, TOTAL_SPOTS } from "@/lib/pricing";
-import { HIJACK_VALUATION_DECAY, hijackCostInTokens } from "@/lib/token";
+import { HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
 import { PIXEL98_MINT, TREASURY_ADDRESS } from "@/lib/solana";
 import {
   bannerPosition,
@@ -75,7 +76,8 @@ function isValidRectangle(indices: number[]): boolean {
 export async function GET() {
   try {
     const pixels = await readAllPixels();
-    return NextResponse.json({ pixels });
+    const burnedFraction = await getBurnedFraction();
+    return NextResponse.json({ pixels, burnedFraction });
   } catch (error) {
     return fail(500, error instanceof Error ? error.message : "read failed");
   }
@@ -268,28 +270,46 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
   if (!target) return fail(404, "nothing to hijack there yet");
   if (target.owner === actor) return fail(400, "you already own this spot");
 
-  const hijackCost = hijackCostInTokens(target.valuationSol);
+  const burnedFraction = await getBurnedFraction();
+  const hijackCost = hijackCostInTokens(burnedFraction);
+  const split = splitHijackBurn(hijackCost);
   const tokenLive = Boolean(PIXEL98_MINT); // server's own env check, never trust the client's claim
 
   if (tokenLive) {
     if (isRateLimited(`pixels-hijack:${ip}`, 20, 60_000)) return fail(429, "Too many hijack attempts — slow down.");
     const signature = body.signature;
-    if (typeof signature !== "string" || !signature) return fail(400, "missing burn signature");
+    if (typeof signature !== "string" || !signature) return fail(400, "missing hijack transaction signature");
 
     return withWriteLock(async () => {
-      const minRawAmount = await tokenAmountToRaw(PIXEL98_MINT, hijackCost);
-      const verified = await verifyBurn({ signature, owner: actor, mint: PIXEL98_MINT, minRawAmount });
-      if (!verified.ok) return fail(402, `burn not verified: ${verified.error}`);
+      const burnRaw = await tokenAmountToRaw(PIXEL98_MINT, split.burnedTokens);
+      const ownerRaw = await tokenAmountToRaw(PIXEL98_MINT, split.ownerTokens);
+
+      const burnVerified = await verifyBurn({ signature, owner: actor, mint: PIXEL98_MINT, minRawAmount: burnRaw });
+      if (!burnVerified.ok) return fail(402, `burn not verified: ${burnVerified.error}`);
+
+      const transferVerified = await verifyTokenTransfer({
+        signature,
+        fromOwner: actor,
+        toOwner: target.owner,
+        mint: PIXEL98_MINT,
+        minRawAmount: ownerRaw,
+      });
+      if (!transferVerified.ok) return fail(402, `owner compensation not verified: ${transferVerified.error}`);
 
       const firstUse = await claimSignature(signature);
-      if (!firstUse) return fail(409, "this burn signature was already used");
+      if (!firstUse) return fail(409, "this hijack transaction signature was already used");
 
       const result = await hijackPixel(index, (current) => applyHijack(current, actor));
       if (!result.ok) {
         await releaseSignature(signature);
         return fail(409, "that spot changed hands before your hijack landed — please retry");
       }
-      return NextResponse.json({ ok: true, pixel: result.pixel, simulated: false });
+      return NextResponse.json({
+        ok: true,
+        pixel: result.pixel,
+        simulated: false,
+        hijack: { costTokens: hijackCost, burnedTokens: split.burnedTokens, ownerTokens: split.ownerTokens, burnedFraction },
+      });
     });
   }
 
@@ -303,7 +323,12 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
 
   const result = await hijackPixel(index, (current) => applyHijack(current, actor));
   if (!result.ok) return fail(409, "that spot changed hands — please retry");
-  return NextResponse.json({ ok: true, pixel: result.pixel, simulated: true });
+  return NextResponse.json({
+    ok: true,
+    pixel: result.pixel,
+    simulated: true,
+    hijack: { costTokens: hijackCost, burnedTokens: split.burnedTokens, ownerTokens: split.ownerTokens, burnedFraction },
+  });
 }
 
 function applyHijack(current: PixelData, newOwner: string): PixelData {
@@ -320,7 +345,9 @@ function applyHijack(current: PixelData, newOwner: string): PixelData {
     rentedTo: undefined,
     rentedUntil: undefined,
     listingPriceSol: undefined,
+    listingPricePixel98: undefined,
     rentPriceSol: undefined,
+    rentPricePixel98: undefined,
     bannerGroupId: undefined,
     bannerCols: undefined,
     bannerRows: undefined,
@@ -375,15 +402,18 @@ async function handleListSale(body: Record<string, unknown>, actor: string) {
   if (!isValidIndex(index)) return fail(400, "invalid index");
   const auth = readAuth(body, "list-sale", index, actor);
   if (!auth.ok) return fail(401, auth.error);
-  const priceSol = body.priceSol;
-  if (typeof priceSol !== "number" || !Number.isFinite(priceSol) || priceSol <= 0 || priceSol > 1_000_000) {
-    return fail(400, "invalid priceSol");
+  const currency = body.currency === "PIXEL98" ? "PIXEL98" : "SOL";
+  const price = body.price;
+  if (typeof price !== "number" || !Number.isFinite(price) || price <= 0 || price > 1_000_000) {
+    return fail(400, "invalid price");
   }
 
   const result = await updateOwnedPixel(index, actor, (current) => ({
     ...current,
-    listingPriceSol: priceSol,
+    listingPriceSol: currency === "SOL" ? price : undefined,
+    listingPricePixel98: currency === "PIXEL98" ? price : undefined,
     rentPriceSol: undefined,
+    rentPricePixel98: undefined,
   }));
   if (!result.ok) return fail(result.reason === "not_owner" ? 403 : 404, result.reason);
   return NextResponse.json({ ok: true, pixel: result.pixel });
@@ -394,20 +424,23 @@ async function handleListRent(body: Record<string, unknown>, actor: string) {
   if (!isValidIndex(index)) return fail(400, "invalid index");
   const auth = readAuth(body, "list-rent", index, actor);
   if (!auth.ok) return fail(401, auth.error);
-  const priceSolPerDay = body.priceSolPerDay;
+  const currency = body.currency === "PIXEL98" ? "PIXEL98" : "SOL";
+  const pricePerDay = body.pricePerDay;
   if (
-    typeof priceSolPerDay !== "number" ||
-    !Number.isFinite(priceSolPerDay) ||
-    priceSolPerDay <= 0 ||
-    priceSolPerDay > 1_000_000
+    typeof pricePerDay !== "number" ||
+    !Number.isFinite(pricePerDay) ||
+    pricePerDay <= 0 ||
+    pricePerDay > 1_000_000
   ) {
-    return fail(400, "invalid priceSolPerDay");
+    return fail(400, "invalid pricePerDay");
   }
 
   const result = await updateOwnedPixel(index, actor, (current) => ({
     ...current,
-    rentPriceSol: priceSolPerDay,
+    rentPriceSol: currency === "SOL" ? pricePerDay : undefined,
+    rentPricePixel98: currency === "PIXEL98" ? pricePerDay : undefined,
     listingPriceSol: undefined,
+    listingPricePixel98: undefined,
   }));
   if (!result.ok) return fail(result.reason === "not_owner" ? 403 : 404, result.reason);
   return NextResponse.json({ ok: true, pixel: result.pixel });
@@ -422,7 +455,9 @@ async function handleUnlist(body: Record<string, unknown>, actor: string) {
   const result = await updateOwnedPixel(index, actor, (current) => ({
     ...current,
     listingPriceSol: undefined,
+    listingPricePixel98: undefined,
     rentPriceSol: undefined,
+    rentPricePixel98: undefined,
   }));
   if (!result.ok) return fail(result.reason === "not_owner" ? 403 : 404, result.reason);
   return NextResponse.json({ ok: true, pixel: result.pixel });
@@ -442,14 +477,23 @@ async function handleBuyListing(body: Record<string, unknown>, actor: string, ip
   return withWriteLock(async () => {
     const current = await getPixel(index);
     if (!current) return fail(404, "spot not found");
-    if (current.listingPriceSol === undefined) return fail(400, "spot is not listed for sale");
+    if (current.listingPriceSol === undefined && current.listingPricePixel98 === undefined) {
+      return fail(400, "spot is not listed for sale");
+    }
     if (current.owner === actor) return fail(400, "you already own this spot");
     const seller = current.owner;
-    const priceSol = current.listingPriceSol;
-    const minLamports = solRequiredLamportsWithTolerance(priceSol);
 
-    const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: seller, minLamports });
-    if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    if (current.listingPriceSol !== undefined) {
+      const priceSol = current.listingPriceSol;
+      const minLamports = solRequiredLamportsWithTolerance(priceSol);
+      const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: seller, minLamports });
+      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    } else {
+      if (!PIXEL98_MINT) return fail(503, "$PIXEL98 not live yet — this listing can't be paid until launch");
+      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, current.listingPricePixel98 ?? 0);
+      const verified = await verifyTokenTransfer({ signature, fromOwner: actor, toOwner: seller, mint: PIXEL98_MINT, minRawAmount: minRaw });
+      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    }
 
     const firstUse = await claimSignature(signature);
     if (!firstUse) return fail(409, "this transaction signature was already used");
@@ -464,7 +508,9 @@ async function handleBuyListing(body: Record<string, unknown>, actor: string, ip
       purchasedAt: Date.now(),
       isRented: false,
       listingPriceSol: undefined,
+      listingPricePixel98: undefined,
       rentPriceSol: undefined,
+      rentPricePixel98: undefined,
       valuationSol: existing.listingPriceSol ?? existing.valuationSol,
     }));
     if (!result.ok) {
@@ -489,14 +535,23 @@ async function handleRent(body: Record<string, unknown>, actor: string, ip: stri
   return withWriteLock(async () => {
     const current = await getPixel(index);
     if (!current) return fail(404, "spot not found");
-    if (current.rentPriceSol === undefined) return fail(400, "spot is not listed for rent");
+    if (current.rentPriceSol === undefined && current.rentPricePixel98 === undefined) {
+      return fail(400, "spot is not listed for rent");
+    }
     if (current.owner === actor) return fail(400, "you already own this spot");
     const owner = current.owner;
-    const priceSol = current.rentPriceSol * days;
-    const minLamports = solRequiredLamportsWithTolerance(priceSol);
 
-    const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: owner, minLamports });
-    if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    if (current.rentPriceSol !== undefined) {
+      const priceSol = current.rentPriceSol * days;
+      const minLamports = solRequiredLamportsWithTolerance(priceSol);
+      const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: owner, minLamports });
+      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    } else {
+      if (!PIXEL98_MINT) return fail(503, "$PIXEL98 not live yet — this listing can't be paid until launch");
+      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, (current.rentPricePixel98 ?? 0) * days);
+      const verified = await verifyTokenTransfer({ signature, fromOwner: actor, toOwner: owner, mint: PIXEL98_MINT, minRawAmount: minRaw });
+      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    }
 
     const firstUse = await claimSignature(signature);
     if (!firstUse) return fail(409, "this transaction signature was already used");
@@ -507,6 +562,7 @@ async function handleRent(body: Record<string, unknown>, actor: string, ip: stri
       rentedTo: actor,
       rentedUntil: Date.now() + days * 24 * 60 * 60 * 1000,
       rentPriceSol: undefined,
+      rentPricePixel98: undefined,
     }));
     if (!result.ok) {
       await releaseSignature(signature);

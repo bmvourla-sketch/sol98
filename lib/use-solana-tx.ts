@@ -5,7 +5,7 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { getMint } from "@solana/spl-token";
 import { PublicKey } from "@solana/web3.js";
 
-import { buildBurnTransaction, buildTransferTransaction } from "./purchase";
+import { buildHijackTransaction, buildTransferTransaction } from "./purchase";
 import { PIXEL98_MINT, getTreasuryPublicKey } from "./solana";
 import { buildAuthMessage } from "./auth-message";
 import { bytesToBase64 } from "./bytes";
@@ -57,31 +57,42 @@ export function useSendSolTransfer() {
   );
 }
 
+export interface HijackBurnArgs {
+  owner: string; // hijacked spot's current owner (receives the compensation half)
+  burnTokens: number; // burned forever
+  transferTokens: number; // sent to `owner`
+}
+
 /**
- * Sends + confirms a $PIXEL98 burn (hijack). While `NEXT_PUBLIC_PIXEL98_MINT`
- * is unset (token not live), falls back to a SIMULATED burn and marks the
- * outcome `simulated: true` so the UI can say so. The API still requires a
- * signed auth message for the simulated path (see `useSignAuthMessage`), so
- * a hijack can never be forged by a bare unauthenticated POST.
+ * Sends + confirms a real $PIXEL98 hijack transaction: burns half the hijack
+ * cost and transfers the other half to the target's owner (the 50/50 split).
+ * While `NEXT_PUBLIC_PIXEL98_MINT` is unset (token not live), falls back to a
+ * SIMULATED outcome and marks `simulated: true` so the UI can say so.
  */
-export function useBurnPixel98() {
+export function useHijackBurn() {
   const { publicKey, sendTransaction, connected } = useWallet();
   const { connection } = useConnection();
 
   return useCallback(
-    async (amountTokens: number, onSigned?: (signature: string) => void): Promise<TxOutcome> => {
+    async (args: HijackBurnArgs, onSigned?: (signature: string) => void): Promise<TxOutcome> => {
       if (!connected || !publicKey) throw new Error("Wallet not connected");
 
       if (!PIXEL98_MINT) {
-        // $PIXEL98 not live yet — simulated burn, clearly flagged. The server
-        // still requires a fresh signed auth message for this path.
+        // $PIXEL98 not live yet — simulated burn, clearly flagged.
         await new Promise((resolve) => setTimeout(resolve, 600));
         return { signature: `simulated-${Date.now().toString(16)}`, simulated: true };
       }
 
       const mint = new PublicKey(PIXEL98_MINT);
       const mintInfo = await getMint(connection, mint);
-      const tx = buildBurnTransaction(publicKey, mint, amountTokens, mintInfo.decimals);
+      const tx = buildHijackTransaction(
+        publicKey,
+        mint,
+        new PublicKey(args.owner),
+        args.burnTokens,
+        args.transferTokens,
+        mintInfo.decimals
+      );
 
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
@@ -96,7 +107,7 @@ export function useBurnPixel98() {
         lastValidBlockHeight,
       });
       if (result.value.err) {
-        throw new Error("Burn failed on-chain");
+        throw new Error("Hijack transaction failed on-chain");
       }
       return { signature, simulated: false };
     },

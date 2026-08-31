@@ -57,6 +57,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
     nextPriceSol,
     areaPriceFor,
     hijackCostFor,
+    hijackSplit,
     buyPixel,
     buyArea,
     hijackPixel,
@@ -75,6 +76,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
   const [message, setMessage] = useState(pixel?.message ?? "");
   const [neon, setNeon] = useState<NeonTemplate>(pixel?.neon ?? "none");
   const [sellPrice, setSellPrice] = useState("");
+  const [sellCurrency, setSellCurrency] = useState<"SOL" | "PIXEL98">("SOL");
   const [txStatus, setTxStatus] = useState<TxStatus>("idle");
   const [alert, setAlert] = useState<AlertState | null>(null);
 
@@ -197,7 +199,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
     }
     setTxStatus("awaiting_signature");
     try {
-      await listForSale(index, price);
+      await listForSale(index, price, sellCurrency);
       onClose();
     } catch (error) {
       showError("Listing Failed", error instanceof Error ? error.message : "Could not list for sale");
@@ -259,6 +261,9 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
                 {tokenLive ? "Burn required: " : "Would require: "}
                 <b>{hijackCost} {TOKEN_SYMBOL}</b>
               </span>
+              <span className="text-[#808080]">
+                {hijackSplit.burnedTokens} burned forever · {hijackSplit.ownerTokens} to the owner
+              </span>
               <span className="text-[#808080]">Hijack → valuation −5%</span>
               {!tokenLive && (
                 <span className="text-[#800000]">
@@ -301,12 +306,16 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
           {mode === "manage" && pixel && (
             <>
               <div className="win98-menu-separator" />
-              <label className="text-xs" htmlFor="pix-sell">List for Sale (SOL)</label>
+              <label className="text-xs" htmlFor="pix-sell">List for Sale</label>
               <div className="flex gap-1">
                 <input id="pix-sell" className="win98-field" value={sellPrice} onChange={(e) => setSellPrice(e.target.value)} placeholder="e.g. 1.5" />
+                <select className="win98-field" value={sellCurrency} onChange={(e) => setSellCurrency(e.target.value as "SOL" | "PIXEL98")}>
+                  <option value="SOL">SOL</option>
+                  <option value="PIXEL98">$PIXEL98</option>
+                </select>
                 <button type="button" className="win98-button" onClick={handleListForSale} disabled={busy}>Sell</button>
               </div>
-              {pixel.listingPriceSol !== undefined && (
+              {(pixel.listingPriceSol !== undefined || pixel.listingPricePixel98 !== undefined) && (
                 <button type="button" className="win98-button" onClick={handleUnlist} disabled={busy}>Unlist</button>
               )}
             </>

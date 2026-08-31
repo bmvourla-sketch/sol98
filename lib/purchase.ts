@@ -4,6 +4,7 @@
 // passes through this module.
 import {
   createBurnInstruction,
+  createTransferInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
@@ -43,8 +44,7 @@ export function buildBuyTransaction(payer: PublicKey, amountSol: number): Transa
 
 /**
  * Real $PIXEL98 burn for a hijack: burns `amountTokens` from the payer's
- * associated token account. Only callable once the mint is live (the hook
- * `useBurnPixel98` guards this).
+ * associated token account. Only callable once the mint is live.
  */
 export function buildBurnTransaction(
   payer: PublicKey,
@@ -56,4 +56,28 @@ export function buildBurnTransaction(
   const amount = BigInt(Math.round(amountTokens * 10 ** decimals));
   if (amount <= 0n) throw new Error("Invalid burn amount");
   return new Transaction().add(createBurnInstruction(ata, mint, payer, amount));
+}
+
+/**
+ * Real $PIXEL98 hijack transaction: burns `burnTokens` (the "forever" half)
+ * AND transfers `transferTokens` to the hijacked spot's current owner (the
+ * 50/50 compensation half) in a single transaction. Only callable once the
+ * mint is live (the `useHijackBurn` hook guards this).
+ */
+export function buildHijackTransaction(
+  payer: PublicKey,
+  mint: PublicKey,
+  owner: PublicKey,
+  burnTokens: number,
+  transferTokens: number,
+  decimals: number
+): Transaction {
+  const ata = getAssociatedTokenAddressSync(mint, payer);
+  const ownerAta = getAssociatedTokenAddressSync(mint, owner);
+  const burnAmount = BigInt(Math.round(burnTokens * 10 ** decimals));
+  const transferAmount = BigInt(Math.round(transferTokens * 10 ** decimals));
+  const tx = new Transaction();
+  if (burnAmount > 0n) tx.add(createBurnInstruction(ata, mint, payer, burnAmount));
+  if (transferAmount > 0n) tx.add(createTransferInstruction(ata, ownerAta, payer, transferAmount));
+  return tx;
 }

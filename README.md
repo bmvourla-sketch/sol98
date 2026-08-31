@@ -12,8 +12,8 @@ Windows 98 estetiğinde, Solana üzerinde on-chain piksel tahtası. Alex Tew'in
 - **Win98 masaüstü** — sürüklenebilir + yeniden boyutlandırılabilir pencereler, taskbar, Start menüsü, sistem tepsisi (saat + Solana cüzdan bağlantısı).
 - **Board.exe** — 100×100 = 10.000 spotluk grid. `price(N) = 0.2 · 1.10^(N-1)` bonding curve; toplu alımlar da **aynı curve'ün tam integrali** ile fiyatlanır (bkz. Mimari notları — eski sürümde toplu alım tek fiyattan yapılıp curve'e karşı arbitraj açığı bırakıyordu, artık yok).
 - **Gerçek Solana ödemesi, sunucu tarafında doğrulanmış** — her satın alma, hijack ve ikincil-piyasa işlemi, sunucunun kendi RPC bağlantısıyla zincirde bizzat doğrulamadığı sürece kabul edilmez (bkz. Güvenlik mimarisi).
-- **Market.exe** — buy / rent / sell spotları; alım ve kiralama artık **doğrudan mevcut sahibe** giden gerçek SOL transferi gerektiriyor (eskiden hiç ödeme alınmıyordu).
-- **Pixel Hijack** — $PIXEL98 canlıya çıktıktan sonra gerçek SPL burn ile; öncesinde imzalı-mesaj kanıtlı, hız sınırlı "simulated" mod.
+- **Market.exe** — buy / rent / sell spotları; alım ve kiralama artık **doğrudan mevcut sahibe** giden gerçek SOL transferi gerektiriyor (eskiden hiç ödeme alınmıyordu). İlanlar **hem SOL hem $PIXEL98** ile fiyatlanabilir (çift para birimi); $PIXEL98 ödemeleri lansman sonrası aktifleşir.
+- **Pixel Hijack** — $PIXEL98 canlıya çıktıktan sonra gerçek SPL burn ile; öncesinde imzalı-mesaj kanıtlı, hız sınırlı "simulated" mod. Yakım maliyeti **toplam arzın kademeli yüzdesi** (%1 → %0.5 → %0.25 → %0.10; toplam yakılan arz %25/%50/%75 eşiklerine göre) olup **%50'si sonsuza kadar yakılır, %50'si ele geçirilen alanın sahibine** gönderilir; her hijack hedefin değerini %5 düşürür.
 - **Neon stüdyosu** — 4+ şablon (Cyberpunk Pulse / Matrix Text / Flashing Neon Border / Sub-Domain Glitch / Rainbow / Sequential) + işlem öncesi canlı önizleme.
 - **PWA** — manifest + service worker, "Install SOL-98".
 
@@ -68,7 +68,8 @@ app/
 lib/
   solana.ts             RPC/treasury/mint config + lamport yardımcıları
   pricing.ts            bonding curve — spotPrice / areaPrice (gerçek integral) / totalRaisedSol
-  token.ts               $PIXEL98 model (hijack maliyeti, airdrop)
+  token.ts               $PIXEL98 model (kademeli hijack yakımı, 50/50 bölünme, airdrop, toplam arz)
+  server/token-stats.ts   kümülatif yakılan arz (mint supply'dan türetilir → hijack kademesi)
   pixel-types.ts          paylaşılan tipler + girdi doğrulama (link/imageUrl/mesaj/banner geometrisi)
   document-types.ts       paylaşılan doküman tipleri + doğrulama
   auth-message.ts         ücretsiz aksiyonlar için imzalanacak kanonik mesaj (client + server ortak)

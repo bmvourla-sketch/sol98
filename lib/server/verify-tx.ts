@@ -6,7 +6,7 @@
 import "server-only";
 import type { ParsedInstruction, PartiallyDecodedInstruction } from "@solana/web3.js";
 import { PublicKey } from "@solana/web3.js";
-import { getMint } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getMint } from "@solana/spl-token";
 
 import { getServerConnection } from "./rpc";
 import { solToLamports } from "@/lib/solana";
@@ -130,7 +130,7 @@ export async function verifyBurn({
       mint?: string;
       authority?: string;
       amount?: string;
-      tokenAmount?: { amount?: string };
+      tokenAmount?: { amount: string };
     };
     const ixMint = info.mint ? normalizePubkey(info.mint) : null;
     const ixAuthority = info.authority ? normalizePubkey(info.authority) : null;
@@ -147,6 +147,75 @@ export async function verifyBurn({
     }
   }
   return { ok: false, error: "no matching $PIXEL98 burn found in that transaction" };
+}
+
+export interface TokenTransferCheck {
+  signature: string;
+  fromOwner: string; // payer / source-token-account authority
+  toOwner: string; // recipient wallet (destination ATA is derived)
+  mint: string;
+  minRawAmount: bigint;
+}
+
+/**
+ * Verifies a confirmed SPL `transfer`/`transferChecked` of at least
+ * `minRawAmount` (raw, pre-decimals) from `fromOwner`'s token account to
+ * `toOwner`'s associated token account. Used for the hijack's 50/50 split
+ * (the owner-compensation half) and for $PIXEL98-denominated market payments.
+ */
+export async function verifyTokenTransfer({
+  signature,
+  fromOwner,
+  toOwner,
+  mint,
+  minRawAmount,
+}: TokenTransferCheck): Promise<VerifyResult> {
+  const authority = normalizePubkey(fromOwner);
+  const recipient = normalizePubkey(toOwner);
+  const mintKey = normalizePubkey(mint);
+  if (!authority || !recipient || !mintKey) return { ok: false, error: "invalid pubkey" };
+
+  const expectedDest = getAssociatedTokenAddressSync(
+    new PublicKey(mintKey),
+    new PublicKey(recipient)
+  ).toBase58();
+
+  const fetched = await fetchConfirmedTx(signature);
+  if (!fetched.ok) return fetched;
+
+  const instructions = fetched.tx.transaction.message.instructions;
+  for (const ix of instructions) {
+    if (!isParsedInstruction(ix)) continue;
+    if (ix.program !== "spl-token") continue;
+    if (ix.parsed?.type !== "transfer" && ix.parsed?.type !== "transferChecked") continue;
+    const info = ix.parsed.info as {
+      mint?: string;
+      authority?: string;
+      destination?: string;
+      amount?: string;
+      tokenAmount?: { amount: string };
+    };
+    const ixMint = info.mint ? normalizePubkey(info.mint) : null;
+    const ixAuthority = info.authority ? normalizePubkey(info.authority) : null;
+    const ixDest = info.destination ? normalizePubkey(info.destination) : null;
+    const rawAmountStr = info.amount ?? info.tokenAmount?.amount;
+    if (!ixMint || !ixAuthority || !ixDest || !rawAmountStr) continue;
+    let rawAmount: bigint;
+    try {
+      rawAmount = BigInt(rawAmountStr);
+    } catch {
+      continue;
+    }
+    if (
+      ixMint === mintKey &&
+      ixAuthority === authority &&
+      ixDest === expectedDest &&
+      rawAmount >= minRawAmount
+    ) {
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: "no matching $PIXEL98 transfer to the owner found in that transaction" };
 }
 
 /** Converts a human token amount to its raw (pre-decimals) integer form using the mint's live decimals. */

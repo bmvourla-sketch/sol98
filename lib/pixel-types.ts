@@ -28,8 +28,10 @@ export interface PixelData extends AdContent {
   isRented: boolean;
   rentedTo?: string;
   rentedUntil?: number;
-  listingPriceSol?: number; // set → for sale
-  rentPriceSol?: number; // set → for rent (per day)
+  listingPriceSol?: number; // set → for sale (SOL)
+  rentPriceSol?: number; // set → for rent, per day (SOL)
+  listingPricePixel98?: number; // set → for sale ($PIXEL98)
+  rentPricePixel98?: number; // set → for rent, per day ($PIXEL98)
   // Multi-block banner grouping (spanning ad).
   bannerGroupId?: string;
   bannerCols?: number;

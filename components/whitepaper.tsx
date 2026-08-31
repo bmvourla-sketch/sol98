@@ -94,20 +94,29 @@ EXECUTIVE SUMMARY
 
 6. PIXEL HIJACK  (BURN-TO-CONQUER)
 
-    An owned block can be overtaken by BURNING $PIXEL98 equal to the
-    block's current SOL valuation (rate: 1 SOL = 1,000 $PIXEL98).
+    An owned block can be overtaken by BURNING $PIXEL98 equal to a
+    percentage of TOTAL SUPPLY (10,000,000 fixed). The burn rate drops as
+    more of the supply is removed from circulation:
 
-        hijack cost = valuation * 1,000 $PIXEL98
+        cumulative burned < 25%   ->  1.00%  (100,000 $PIXEL98)
+        cumulative burned >= 25%  ->  0.50%  ( 50,000 $PIXEL98)
+        cumulative burned >= 50%  ->  0.25%  ( 25,000 $PIXEL98)
+        cumulative burned >= 75%  ->  0.10%  ( 10,000 $PIXEL98)
+
+    The hijack payment is split 50/50: half is burned forever and the
+    other half is sent to the hijacked block's current owner (fair
+    compensation for losing the ad).
 
     Each successful hijack REDUCES the target's valuation by 5% (0.95x).
     Hijack resets the ad and transfers ownership. (Activated at launch.)
 
 ================================================================================
 
-7. PAYMENTS
+7. PAYMENTS  (SOL + $PIXEL98)
 
     - SOL: a real SystemProgram.transfer to the treasury.
-    - SOL98: pay the SOL-equivalent in SOL98 (1 SOL = 1,000 SOL98).
+    - $PIXEL98: listings can also be priced in $PIXEL98 (1 SOL = 1,000
+      $PIXEL98 reference rate); $PIXEL98 payments activate at launch.
 
     Ownership is tied to the buyer's wallet: a block is purchased with
     a real, wallet-signed SOL transfer (SystemProgram.transfer to the

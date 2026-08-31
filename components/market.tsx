@@ -24,10 +24,10 @@ export function Market() {
 
   const mySpots = Object.values(ctx.pixels).filter((p) => p.owner === owner);
   const forSale = Object.values(ctx.pixels).filter(
-    (p) => p.listingPriceSol !== undefined && p.owner !== owner
+    (p) => (p.listingPriceSol !== undefined || p.listingPricePixel98 !== undefined) && p.owner !== owner
   );
   const forRent = Object.values(ctx.pixels).filter(
-    (p) => p.rentPriceSol !== undefined && p.owner !== owner
+    (p) => (p.rentPriceSol !== undefined || p.rentPricePixel98 !== undefined) && p.owner !== owner
   );
 
   async function buyListing(index: number) {
@@ -59,7 +59,7 @@ export function Market() {
   async function listForRent(index: number) {
     setError(null);
     try {
-      await ctx.listForRent(index, 0.05); // default 0.05 SOL/day — owner can relist at any price via Manage
+      await ctx.listForRent(index, 0.05, "SOL"); // default 0.05 SOL/day — owner can relist at any price via Manage
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not list for rent");
     }
@@ -92,14 +92,20 @@ export function Market() {
           {p.listingPriceSol !== undefined && (
             <span className="text-[#800000]">listed @ {formatSol(p.listingPriceSol)} SOL</span>
           )}
+          {p.listingPricePixel98 !== undefined && (
+            <span className="text-[#800000]">listed @ {p.listingPricePixel98} $PIXEL98</span>
+          )}
           {p.rentPriceSol !== undefined && (
             <span className="text-[#000080]">rent {formatSol(p.rentPriceSol)}/day</span>
+          )}
+          {p.rentPricePixel98 !== undefined && (
+            <span className="text-[#000080]">rent {p.rentPricePixel98} $PIXEL98/day</span>
           )}
           <span className="ml-auto flex gap-1">
             <button type="button" className="win98-button !px-2 !py-0" onClick={() => setDialogIndex(p.index)}>
               Manage
             </button>
-            {p.rentPriceSol === undefined && p.listingPriceSol === undefined && (
+            {p.rentPriceSol === undefined && p.listingPriceSol === undefined && p.rentPricePixel98 === undefined && p.listingPricePixel98 === undefined && (
               <button type="button" className="win98-button !px-2 !py-0" onClick={() => listForRent(p.index)}>
                 Rent out
               </button>
@@ -115,15 +121,25 @@ export function Market() {
         <div key={p.index} className="bevel-out flex items-center gap-2 px-2 py-1">
           <span>#{p.index + 1}</span>
           <span className="text-[#808080]">{shortenAddress(p.owner, 4)}</span>
-          <span>@ {formatSol(p.listingPriceSol ?? 0)} SOL</span>
-          <button
-            type="button"
-            className="win98-button !px-2 !py-0 ml-auto"
-            onClick={() => buyListing(p.index)}
-            disabled={busyIndex === p.index}
-          >
-            {busyIndex === p.index ? "Paying…" : "Buy"}
-          </button>
+          <span>
+            {p.listingPriceSol !== undefined
+              ? `@ ${formatSol(p.listingPriceSol)} SOL`
+              : `@ ${p.listingPricePixel98} $PIXEL98`}
+          </span>
+          {p.listingPriceSol !== undefined ? (
+            <button
+              type="button"
+              className="win98-button !px-2 !py-0 ml-auto"
+              onClick={() => buyListing(p.index)}
+              disabled={busyIndex === p.index}
+            >
+              {busyIndex === p.index ? "Paying…" : "Buy"}
+            </button>
+          ) : (
+            <button type="button" className="win98-button !px-2 !py-0 ml-auto" disabled title="Available after $PIXEL98 launch">
+              After launch
+            </button>
+          )}
         </div>
       ))}
 
@@ -134,15 +150,25 @@ export function Market() {
         <div key={p.index} className="bevel-out flex items-center gap-2 px-2 py-1">
           <span>#{p.index + 1}</span>
           <span className="text-[#808080]">{shortenAddress(p.owner, 4)}</span>
-          <span>{formatSol(p.rentPriceSol ?? 0)} SOL/day</span>
-          <button
-            type="button"
-            className="win98-button !px-2 !py-0 ml-auto"
-            onClick={() => rent(p.index)}
-            disabled={busyIndex === p.index}
-          >
-            {busyIndex === p.index ? "Paying…" : "Rent 30d"}
-          </button>
+          <span>
+            {p.rentPriceSol !== undefined
+              ? `${formatSol(p.rentPriceSol)} SOL/day`
+              : `${p.rentPricePixel98} $PIXEL98/day`}
+          </span>
+          {p.rentPriceSol !== undefined ? (
+            <button
+              type="button"
+              className="win98-button !px-2 !py-0 ml-auto"
+              onClick={() => rent(p.index)}
+              disabled={busyIndex === p.index}
+            >
+              {busyIndex === p.index ? "Paying…" : "Rent 30d"}
+            </button>
+          ) : (
+            <button type="button" className="win98-button !px-2 !py-0 ml-auto" disabled title="Available after $PIXEL98 launch">
+              After launch
+            </button>
+          )}
         </div>
       ))}
 

@@ -14,9 +14,9 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 
 import { areaPrice, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
-import { airdropFor, hijackCostInTokens } from "./token";
+import { airdropFor, hijackCostInTokens, splitHijackBurn } from "./token";
 import { PIXEL98_MINT } from "./solana";
-import { useBurnPixel98, useSendSolTransfer, useSignAuthMessage } from "./use-solana-tx";
+import { useHijackBurn, useSendSolTransfer, useSignAuthMessage } from "./use-solana-tx";
 import type { AdContent, PixelData } from "./pixel-types";
 
 export type { AdContent, NeonTemplate, PixelData } from "./pixel-types";
@@ -25,6 +25,9 @@ export type SyncState = "loading" | "live" | "offline";
 
 /** Awaiting-signature / confirming — surfaced so dialogs can show progress. */
 export type TxPhase = "awaiting_signature" | "processing" | null;
+
+/** Which currency a market listing is priced in. */
+export type ListingCurrency = "SOL" | "PIXEL98";
 
 interface PixelContextValue {
   pixels: Record<number, PixelData>;
@@ -36,6 +39,10 @@ interface PixelContextValue {
   connectedOwner: string;
   txPhase: TxPhase;
   areaPriceFor: (count: number) => number;
+  /** Current hijack burn tier inputs (driven by cumulative burned supply). */
+  burnedFraction: number;
+  hijackCostTokens: number;
+  hijackSplit: { burnedTokens: number; ownerTokens: number };
   hijackCostFor: (index: number) => number;
 
   buyPixel: (index: number, ad: AdContent) => Promise<PixelData>;
@@ -46,10 +53,10 @@ interface PixelContextValue {
   editPixel: (index: number, ad: Partial<AdContent>) => Promise<PixelData>;
   /** Apply an ad/banner to every block in a banner group. */
   editArea: (groupId: string, ad: Partial<AdContent>) => Promise<PixelData[]>;
-  listForSale: (index: number, priceSol: number) => Promise<PixelData>;
+  listForSale: (index: number, price: number, currency: ListingCurrency) => Promise<PixelData>;
   /** Pays the CURRENT owner directly (peer-to-peer), then transfers ownership. */
   buyListing: (index: number) => Promise<PixelData>;
-  listForRent: (index: number, priceSolPerDay: number) => Promise<PixelData>;
+  listForRent: (index: number, pricePerDay: number, currency: ListingCurrency) => Promise<PixelData>;
   /** Pays the CURRENT owner directly for `days`. */
   rentPixel: (index: number, days: number) => Promise<PixelData>;
   unlist: (index: number) => Promise<PixelData>;
@@ -144,11 +151,12 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   const { publicKey, connected } = useWallet();
   const sendSol = useSendSolTransfer();
   const signAuthMessage = useSignAuthMessage();
-  const burnPixel98 = useBurnPixel98();
+  const hijackBurn = useHijackBurn();
 
   const [pixels, setPixels] = useState<Record<number, PixelData>>({});
   const [syncState, setSyncState] = useState<SyncState>("loading");
   const [txPhase, setTxPhase] = useState<TxPhase>(null);
+  const [burnedFraction, setBurnedFraction] = useState(0);
   const hydrated = useRef(false);
 
   useEffect(() => {
@@ -160,8 +168,9 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch(`${API_URL}?t=${Date.now()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { pixels?: Record<number, PixelData> };
+      const data = (await res.json()) as { pixels?: Record<number, PixelData>; burnedFraction?: number };
       setPixels((prev) => mergePixels(prev, data.pixels ?? {}));
+      if (typeof data.burnedFraction === "number") setBurnedFraction(data.burnedFraction);
       setSyncState("live");
     } catch {
       setSyncState("offline");
@@ -249,12 +258,15 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       const target = pixels[index];
       if (!target) throw new Error("Nothing to hijack there yet");
       const tokenLive = Boolean(PIXEL98_MINT);
-      const hijackCost = hijackCostInTokens(target.valuationSol);
+      const split = splitHijackBurn(hijackCostInTokens(burnedFraction));
 
       try {
         if (tokenLive) {
           setTxPhase("awaiting_signature");
-          const outcome = await burnPixel98(hijackCost, () => setTxPhase("processing"));
+          const outcome = await hijackBurn(
+            { owner: target.owner, burnTokens: split.burnedTokens, transferTokens: split.ownerTokens },
+            () => setTxPhase("processing")
+          );
           const result = await postAction<{ pixel: PixelData; simulated: boolean }>("hijack", {
             actor,
             index,
@@ -276,7 +288,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
         setTxPhase(null);
       }
     },
-    [requireWallet, pixels, burnPixel98, signAuth]
+    [requireWallet, pixels, burnedFraction, hijackBurn, signAuth]
   );
 
   const editPixel = useCallback(
@@ -306,10 +318,10 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   );
 
   const listForSale = useCallback(
-    async (index: number, priceSol: number): Promise<PixelData> => {
+    async (index: number, price: number, currency: ListingCurrency): Promise<PixelData> => {
       const actor = requireWallet();
       const auth = await signAuth("list-sale", index);
-      const result = await postAction<{ pixel: PixelData }>("list-sale", { actor, index, priceSol, ...auth });
+      const result = await postAction<{ pixel: PixelData }>("list-sale", { actor, index, price, currency, ...auth });
       setPixels((prev) => ({ ...prev, [index]: result.pixel }));
       return result.pixel;
     },
@@ -317,13 +329,14 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   );
 
   const listForRent = useCallback(
-    async (index: number, priceSolPerDay: number): Promise<PixelData> => {
+    async (index: number, pricePerDay: number, currency: ListingCurrency): Promise<PixelData> => {
       const actor = requireWallet();
       const auth = await signAuth("list-rent", index);
       const result = await postAction<{ pixel: PixelData }>("list-rent", {
         actor,
         index,
-        priceSolPerDay,
+        pricePerDay,
+        currency,
         ...auth,
       });
       setPixels((prev) => ({ ...prev, [index]: result.pixel }));
@@ -347,8 +360,13 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     async (index: number): Promise<PixelData> => {
       const actor = requireWallet();
       const current = pixels[index];
-      if (!current || current.listingPriceSol === undefined) throw new Error("Not listed for sale");
+      if (!current || (current.listingPriceSol === undefined && current.listingPricePixel98 === undefined)) {
+        throw new Error("Not listed for sale");
+      }
       try {
+        if (current.listingPriceSol === undefined) {
+          throw new Error("This listing is priced in $PIXEL98 — available after launch");
+        }
         const signature = await sendTransfer(current.listingPriceSol, new PublicKey(current.owner));
         const result = await postAction<{ pixel: PixelData }>("buy-listing", { actor, index, signature });
         setPixels((prev) => ({ ...prev, [index]: result.pixel }));
@@ -364,8 +382,13 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     async (index: number, days: number): Promise<PixelData> => {
       const actor = requireWallet();
       const current = pixels[index];
-      if (!current || current.rentPriceSol === undefined) throw new Error("Not listed for rent");
+      if (!current || (current.rentPriceSol === undefined && current.rentPricePixel98 === undefined)) {
+        throw new Error("Not listed for rent");
+      }
       try {
+        if (current.rentPriceSol === undefined) {
+          throw new Error("This listing is priced in $PIXEL98 — available after launch");
+        }
         const signature = await sendTransfer(current.rentPriceSol * days, new PublicKey(current.owner));
         const result = await postAction<{ pixel: PixelData }>("rent", { actor, index, days, signature });
         setPixels((prev) => ({ ...prev, [index]: result.pixel }));
@@ -400,8 +423,8 @@ export function PixelProvider({ children }: { children: ReactNode }) {
 
   const areaPriceFor = useCallback((count: number) => areaPrice(soldCount, count), [soldCount]);
   const hijackCostFor = useCallback(
-    (index: number) => (pixels[index] ? hijackCostInTokens(pixels[index].valuationSol) : 0),
-    [pixels]
+    (index: number) => (pixels[index] ? hijackCostInTokens(burnedFraction) : 0),
+    [pixels, burnedFraction]
   );
 
   const value = useMemo<PixelContextValue>(
@@ -415,6 +438,9 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       connectedOwner: owner,
       txPhase,
       areaPriceFor,
+      burnedFraction,
+      hijackCostTokens: hijackCostInTokens(burnedFraction),
+      hijackSplit: splitHijackBurn(hijackCostInTokens(burnedFraction)),
       hijackCostFor,
       buyPixel,
       buyArea,
@@ -437,6 +463,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       owner,
       txPhase,
       areaPriceFor,
+      burnedFraction,
       hijackCostFor,
       buyPixel,
       buyArea,

@@ -9,7 +9,7 @@ PHASE 1 — BOOT SEQUENCE   [SHIPPED]
     [x] Banner.exe — banner studio (upload + optimize + download + place)
     [x] Neon templates (Cyberpunk / Matrix / Flashing / Glitch / Rainbow)
     [x] Clickable ads (click → redirect to destination link)
-    [x] SOL + SOL98 payments
+    [x] SOL + $PIXEL98 payments (dual currency, buy/rent/sell)
     [x] PWA install + offline service worker
     [x] On-chain purchases (wallet-signed SOL transfer)
 
@@ -17,7 +17,7 @@ PHASE 2 — BLUE SCREEN OF FOMO
     [ ] Reach the 100th sale
     [ ] Launch $PIXEL98 on Pump.fun
     [ ] Airdrop to block owners (proportional)
-    [ ] Pixel Hijack goes live (real token burn)
+    [ ] Pixel Hijack goes live (tiered burn: 1% → 0.5% → 0.25% → 0.10%, 50/50 split, 5% decay)
 
 PHASE 3 — CYBER WAR
     [ ] Hijack fully on-chain
