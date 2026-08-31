@@ -110,7 +110,7 @@ export default function Desktop() {
   return (
     <PixelProvider>
       <DocumentProvider>
-        <div className="flex h-screen flex-col overflow-hidden">
+        <div className="app-root flex flex-col overflow-hidden">
           {/* Green desktop = the pixel board */}
           <div className="relative flex-1 overflow-hidden">
             {/* Floating wallet + zoom (top-right, no bar) */}

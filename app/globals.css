@@ -31,9 +31,17 @@ body {
   color: #000;
   font-family: Tahoma, "MS Sans Serif", "Segoe UI", sans-serif;
   font-size: 13px;
-  overflow: hidden;
+  overflow-y: auto; /* scroll fallback if the viewport height is misreported */
   -webkit-font-smoothing: none;
   user-select: none;
+}
+
+/* App shell height: use the DYNAMIC viewport on mobile so the taskbar is not
+   pushed under the collapsing browser address bar (100vh > visible height). */
+.app-root {
+  height: 100vh; /* fallback for older browsers */
+  height: 100dvh;
+  height: 100svh; /* safest: never taller than the visible viewport */
 }
 
 /* Crisp pixel rendering for the board and icons. */
@@ -195,10 +203,11 @@ body {
   z-index: 30; /* keep the taskbar (and its popovers) above floating windows */
   background-color: var(--win98-silver);
   border-top: 2px solid var(--win98-light);
-  height: 32px;
+  min-height: 32px;
   display: flex;
   align-items: stretch;
   padding: 2px;
+  padding-bottom: calc(2px + env(safe-area-inset-bottom, 0px));
   gap: 3px;
 }
 
@@ -450,7 +459,7 @@ body {
 
 /* Mobile & touch adjustments. */
 @media (max-width: 640px) {
-  .win98-taskbar { height: 40px; }
+  .win98-taskbar { min-height: 40px; }
   .tray-social { display: none; }
   .win98-taskbar-button { padding: 0 8px; font-size: 11px; }
   .win98-menu-item { padding: 8px 12px; }
