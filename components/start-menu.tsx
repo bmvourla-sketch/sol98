@@ -21,7 +21,7 @@ interface StartMenuProps {
 /** Classic Win98 Start menu listing the five app windows. */
 export function StartMenu({ onOpen, onClose }: StartMenuProps) {
   return (
-    <div className="win98-menu absolute bottom-[36px] left-1 z-[100] w-56 py-1">
+    <div className="win98-menu absolute bottom-full left-1 z-[100] w-56 py-1">
       <div className="win98-menu-item font-bold">
         <span className="flex h-6 w-6 items-center justify-center bg-[#000080] text-[10px] text-white">
           S98

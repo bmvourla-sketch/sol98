@@ -5,7 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { X } from "lucide-react";
 
 import { usePixels, type NeonTemplate } from "@/lib/pixel-store";
-import { formatSol } from "@/lib/pricing";
+import { bulkPriceBreakdown, formatSol } from "@/lib/pricing";
 import { TOKEN_SYMBOL } from "@/lib/token";
 import { isTokenLive, shortenAddress } from "@/lib/solana";
 import { isSafeImageUrl, isSafeLinkUrl } from "@/lib/pixel-types";
@@ -237,6 +237,17 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
               )}
               Total: <b>{formatSol(price)} SOL</b>
               <span className="text-[#808080]"> (bonding curve, {soldCount} sold so far)</span>
+              {multi && (
+                <div className="mt-1 text-[#808080]">
+                  {bulkPriceBreakdown(soldCount, indices.length).map((t) => (
+                    <div key={t.from}>
+                      {t.from}
+                      {t.count > 1 ? `–${t.to}` : ""} blocks · {t.count} × {formatSol(t.unitPrice)} ={" "}
+                      {formatSol(t.subtotal)} SOL
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

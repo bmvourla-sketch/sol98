@@ -191,6 +191,8 @@ body {
    Taskbar.
    --------------------------------------------------------------------------- */
 .win98-taskbar {
+  position: relative; /* anchors the Start menu + tray popovers */
+  z-index: 30; /* keep the taskbar (and its popovers) above floating windows */
   background-color: var(--win98-silver);
   border-top: 2px solid var(--win98-light);
   height: 32px;
@@ -237,7 +239,6 @@ body {
   display: grid;
   width: max-content;
   background-color: #fff;
-  touch-action: none; /* tap/drag selects cells instead of scrolling */
 }
 
 .pixel-cell {
@@ -247,7 +248,6 @@ body {
   background-color: #ffffff;
   position: relative;
   cursor: pointer;
-  touch-action: none;
   -webkit-tap-highlight-color: transparent;
 }
 
