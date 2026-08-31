@@ -119,7 +119,7 @@ export default function Desktop() {
             <div className="absolute right-2 top-2 z-20 flex max-w-[calc(100vw-1rem)] flex-wrap items-center justify-end gap-1">
               <button type="button" className="win98-button !px-2 !py-0 text-[11px]" onClick={() => setZoom((z) => Math.max(0.2, z / 1.5))}>−</button>
               <span className="w-8 text-center text-[11px] text-white sm:w-10">{Math.round(zoom * 100)}%</span>
-              <button type="button" className="win98-button !px-2 !py-0 text-[11px]" onClick={() => setZoom((z) => Math.min(8, z * 1.5))}>+</button>
+              <button type="button" className="win98-button !px-2 !py-0 text-[11px]" title="Zoom to cursor: hold Ctrl + mouse wheel" onClick={() => setZoom((z) => Math.min(8, z * 1.5))}>+</button>
               <button type="button" className="win98-button !px-2 !py-0 text-[11px] hidden sm:inline-block" onClick={() => setZoom(1)}>1:1</button>
               <SolanaConnectButton />
             </div>

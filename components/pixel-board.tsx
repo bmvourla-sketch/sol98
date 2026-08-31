@@ -93,6 +93,7 @@ export function PixelBoard({
     }
 
     function onWheel(e: WheelEvent) {
+      if (!e.ctrlKey) return; // plain wheel scrolls; Ctrl+wheel zooms to the cursor
       e.preventDefault();
       setAnchor(e.clientX, e.clientY);
       applyZoom(Math.exp(-e.deltaY * 0.0015));
