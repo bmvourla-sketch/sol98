@@ -124,7 +124,7 @@ export default function Desktop() {
               <SolanaConnectButton />
             </div>
             <div className="h-full overflow-auto bg-[#008080]">
-              <PixelBoard zoom={zoom} />
+              <PixelBoard zoom={zoom} onZoomChange={setZoom} />
             </div>
 
             {/* Floating windows (draggable) */}

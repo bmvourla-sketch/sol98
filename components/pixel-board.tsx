@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { usePixels } from "@/lib/pixel-store";
@@ -11,6 +11,12 @@ import { PixelCell } from "./pixel-cell";
 import { PixelDialog } from "./pixel-dialog";
 
 const BASE_CELL = 16; // px at zoom = 1
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 8;
+
+function clampZoom(z: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+}
 
 function rectIndices(start: number, end: number): number[] {
   const r1 = Math.floor(start / BOARD_SIZE);
@@ -29,15 +35,115 @@ function rectIndices(start: number, end: number): number[] {
 /**
  * The pixel board on the green desktop: drag to select a rectangular area,
  * release to buy it as one banner. 100×100 blocks (10,000), each 10×10 px.
- * Zoom is driven by the desktop (controls sit next to the wallet).
+ *
+ * Zoom is driven by the desktop (controls sit next to the wallet), but the
+ * board itself supports mouse-wheel and touch-pinch zoom that anchors on the
+ * pointer/touch center — so you zoom toward the point you're looking at.
  */
-export function PixelBoard({ zoom }: { zoom: number }) {
+export function PixelBoard({
+  zoom,
+  onZoomChange,
+}: {
+  zoom: number;
+  onZoomChange: (zoom: number) => void;
+}) {
   const { pixels, soldCount, nextPriceSol, totalRaisedSol, firstFreeIndex, syncState } =
     usePixels();
   const { connected, publicKey } = useWallet();
   const [sel, setSel] = useState<{ start: number; end: number } | null>(null);
   const [activeIndices, setActiveIndices] = useState<number[] | null>(null);
   const draggingRef = useRef(false);
+
+  // Zoom-to-point machinery.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(zoom);
+  const anchorRef = useRef<{ ratioX: number; ratioY: number; offsetX: number; offsetY: number } | null>(null);
+  const pinchRef = useRef<{ dist: number } | null>(null);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  // Attach wheel + touch listeners with `passive: false` (React attaches these
+  // passively, which would make preventDefault a no-op — and we must stop the
+  // page from scrolling/zoom the page while we zoom the board instead).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const node = el;
+
+    function setAnchor(clientX: number, clientY: number) {
+      const rect = node.getBoundingClientRect();
+      const offsetX = clientX - rect.left;
+      const offsetY = clientY - rect.top;
+      anchorRef.current = {
+        ratioX: node.scrollWidth ? (node.scrollLeft + offsetX) / node.scrollWidth : 0,
+        ratioY: node.scrollHeight ? (node.scrollTop + offsetY) / node.scrollHeight : 0,
+        offsetX,
+        offsetY,
+      };
+    }
+
+    function applyZoom(factor: number) {
+      const next = clampZoom(zoomRef.current * factor);
+      if (next !== zoomRef.current) {
+        zoomRef.current = next;
+        onZoomChange(next);
+      }
+    }
+
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      setAnchor(e.clientX, e.clientY);
+      applyZoom(Math.exp(-e.deltaY * 0.0015));
+    }
+
+    function onTouchStart(e: TouchEvent) {
+      if (e.touches.length === 2) {
+        const [a, b] = [e.touches[0], e.touches[1]];
+        pinchRef.current = { dist: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) };
+      }
+    }
+
+    function onTouchMove(e: TouchEvent) {
+      if (e.touches.length !== 2 || !pinchRef.current) return;
+      e.preventDefault();
+      const [a, b] = [e.touches[0], e.touches[1]];
+      const newDist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      if (pinchRef.current.dist <= 0) {
+        pinchRef.current.dist = newDist;
+        return;
+      }
+      setAnchor((a.clientX + b.clientX) / 2, (a.clientY + b.clientY) / 2);
+      applyZoom(newDist / pinchRef.current.dist);
+      pinchRef.current.dist = newDist;
+    }
+
+    function onTouchEnd(e: TouchEvent) {
+      if (e.touches.length < 2) pinchRef.current = null;
+    }
+
+    node.addEventListener("wheel", onWheel, { passive: false });
+    node.addEventListener("touchstart", onTouchStart, { passive: false });
+    node.addEventListener("touchmove", onTouchMove, { passive: false });
+    node.addEventListener("touchend", onTouchEnd);
+    return () => {
+      node.removeEventListener("wheel", onWheel);
+      node.removeEventListener("touchstart", onTouchStart);
+      node.removeEventListener("touchmove", onTouchMove);
+      node.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [onZoomChange]);
+
+  // After the grid re-renders at the new zoom, keep the anchored point still.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = anchorRef.current;
+    if (!el || !anchor) return;
+    el.scrollLeft = anchor.ratioX * el.scrollWidth - anchor.offsetX;
+    el.scrollTop = anchor.ratioY * el.scrollHeight - anchor.offsetY;
+    anchorRef.current = null;
+  }, [zoom]);
 
   const onSelectStart = useCallback((index: number) => {
     draggingRef.current = true;
@@ -140,8 +246,9 @@ export function PixelBoard({ zoom }: { zoom: number }) {
         </div>
       </div>
 
-      {/* Board — drag to select an area */}
+      {/* Board — drag to select an area; wheel/pinch to zoom at the pointer */}
       <div
+        ref={scrollRef}
         className="bevel-in min-h-0 flex-1 overflow-auto"
         onMouseUp={handleMouseUp}
         onMouseDown={(e) => e.preventDefault()}
