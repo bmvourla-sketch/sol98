@@ -6,6 +6,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { usePixels } from "@/lib/pixel-store";
 import { BOARD_SIZE, formatSol, TOTAL_SPOTS } from "@/lib/pricing";
 import { LAUNCH_TARGET_SPOTS } from "@/lib/token";
+import { isSafeLinkUrl } from "@/lib/pixel-types";
 import { PixelCell } from "./pixel-cell";
 import { PixelDialog } from "./pixel-dialog";
 
@@ -26,10 +27,9 @@ function rectIndices(start: number, end: number): number[] {
 }
 
 /**
- * The pixel board on the green desktop: tap/drag to select a rectangular
- * area, release to buy it as one banner. Selection uses POINTER events (so it
- * works identically with mouse and touch). 100×100 blocks (10,000), each
- * 10×10 px. Zoom is driven by the desktop (controls sit next to the wallet).
+ * The pixel board on the green desktop: drag to select a rectangular area,
+ * release to buy it as one banner. 100×100 blocks (10,000), each 10×10 px.
+ * Zoom is driven by the desktop (controls sit next to the wallet).
  */
 export function PixelBoard({ zoom }: { zoom: number }) {
   const { pixels, soldCount, nextPriceSol, totalRaisedSol, firstFreeIndex, syncState } =
@@ -38,65 +38,39 @@ export function PixelBoard({ zoom }: { zoom: number }) {
   const [sel, setSel] = useState<{ start: number; end: number } | null>(null);
   const [activeIndices, setActiveIndices] = useState<number[] | null>(null);
   const draggingRef = useRef(false);
-  const gridRef = useRef<HTMLDivElement>(null);
 
-  const cell = Math.max(1, Math.round(BASE_CELL * zoom));
+  const onSelectStart = useCallback((index: number) => {
+    draggingRef.current = true;
+    setSel({ start: index, end: index });
+  }, []);
 
-  const cellFromPoint = useCallback(
-    (clientX: number, clientY: number): number | null => {
-      const grid = gridRef.current;
-      if (!grid) return null;
-      const rect = grid.getBoundingClientRect();
-      const col = Math.floor((clientX - rect.left) / cell);
-      const row = Math.floor((clientY - rect.top) / cell);
-      if (col < 0 || col >= BOARD_SIZE || row < 0 || row >= BOARD_SIZE) return null;
-      return row * BOARD_SIZE + col;
-    },
-    [cell]
-  );
+  const onSelectMove = useCallback((index: number) => {
+    if (draggingRef.current) setSel((s) => (s ? { ...s, end: index } : s));
+  }, []);
 
   const me = publicKey?.toBase58() ?? "";
 
-  const finishSelection = useCallback(() => {
-    if (!draggingRef.current) return;
-    draggingRef.current = false;
-    if (sel) {
-      const indices = rectIndices(sel.start, sel.end);
-      // Clicking a single owned ad with a link redirects to it (click-through).
-      if (indices.length === 1) {
-        const p = pixels[indices[0]];
-        if (p && p.destination && p.owner !== me) {
-          window.open(p.destination, "_blank", "noopener,noreferrer");
-          setSel(null);
-          return;
+  const handleMouseUp = useCallback(() => {
+    if (draggingRef.current) {
+      draggingRef.current = false;
+      if (sel) {
+        const indices = rectIndices(sel.start, sel.end);
+        // Clicking a single owned ad with a link redirects to it (click-through).
+        if (indices.length === 1) {
+          const p = pixels[indices[0]];
+          // Re-validated here (not just on write) — defense in depth against
+          // any pixel written before this check existed.
+          if (p && p.destination && p.owner !== me && isSafeLinkUrl(p.destination)) {
+            window.open(p.destination, "_blank", "noopener,noreferrer");
+            setSel(null);
+            return;
+          }
         }
+        setActiveIndices(indices);
+        setSel(null);
       }
-      setActiveIndices(indices);
-      setSel(null);
     }
   }, [sel, pixels, me]);
-
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      const idx = cellFromPoint(e.clientX, e.clientY);
-      if (idx === null) return;
-      e.preventDefault();
-      draggingRef.current = true;
-      setSel({ start: idx, end: idx });
-      e.currentTarget.setPointerCapture?.(e.pointerId);
-    },
-    [cellFromPoint]
-  );
-
-  const handlePointerMove = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!draggingRef.current) return;
-      const idx = cellFromPoint(e.clientX, e.clientY);
-      if (idx === null) return;
-      setSel((s) => (s ? { ...s, end: idx } : s));
-    },
-    [cellFromPoint]
-  );
 
   const cells = useMemo(() => {
     let minR = -1, maxR = -1, minC = -1, maxC = -1;
@@ -111,13 +85,23 @@ export function PixelBoard({ zoom }: { zoom: number }) {
       const r = Math.floor(i / BOARD_SIZE);
       const c = i % BOARD_SIZE;
       const selected = sel ? r >= minR && r <= maxR && c >= minC && c <= maxC : false;
-      list.push(<PixelCell key={i} index={i} pixel={pixels[i]} selected={selected} />);
+      list.push(
+        <PixelCell
+          key={i}
+          index={i}
+          pixel={pixels[i]}
+          selected={selected}
+          onSelectStart={onSelectStart}
+          onSelectMove={onSelectMove}
+        />
+      );
     }
     return list;
-  }, [pixels, sel]);
+  }, [pixels, sel, onSelectStart, onSelectMove]);
 
   const remaining = Math.max(0, LAUNCH_TARGET_SPOTS - soldCount);
   const launchPct = Math.min(100, (soldCount / LAUNCH_TARGET_SPOTS) * 100);
+  const cell = Math.max(1, Math.round(BASE_CELL * zoom));
   const selCount = sel ? rectIndices(sel.start, sel.end).length : 0;
 
   return (
@@ -153,16 +137,13 @@ export function PixelBoard({ zoom }: { zoom: number }) {
         </div>
       </div>
 
-      {/* Board — tap/drag to select an area (pointer events = mouse + touch) */}
+      {/* Board — drag to select an area */}
       <div
         className="bevel-in min-h-0 flex-1 overflow-auto"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={finishSelection}
-        onPointerCancel={finishSelection}
+        onMouseUp={handleMouseUp}
+        onMouseDown={(e) => e.preventDefault()}
       >
         <div
-          ref={gridRef}
           className="pixel-board-grid"
           style={{
             gridTemplateColumns: `repeat(${BOARD_SIZE}, ${cell}px)`,

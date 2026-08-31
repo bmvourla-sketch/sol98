@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { usePixels, type NeonTemplate } from "@/lib/pixel-store";
+import { isSafeLinkUrl } from "@/lib/pixel-types";
 
 const FONTS = ["Tahoma", "Courier New", "Impact", "Arial Black", "Comic Sans MS", "Georgia", "Verdana"];
 const TEXT_COLORS = ["#ffff00", "#ffffff", "#000000", "#ff0000", "#00ff00", "#0000ff", "#ff00ff", "#00ffff"];
@@ -194,19 +195,31 @@ export function BannerMaker() {
     });
   }
 
-  function place() {
+  async function place() {
     const canvas = canvasRef.current;
     if (!target) {
       setStatus("Pick a purchased area first.");
       return;
     }
     if (!canvas) return;
+    const destination = link.trim();
+    if (!isSafeLinkUrl(destination)) {
+      setStatus("Link must be an http:// or https:// URL (or left empty).");
+      return;
+    }
+    let dataUrl: string;
     try {
-      const dataUrl = canvas.toDataURL("image/png");
-      editArea(target, { imageUrl: dataUrl, destination: link.trim(), message: text.trim() });
-      setStatus("Banner placed on your area.");
+      dataUrl = canvas.toDataURL("image/png");
     } catch {
       setStatus("Could not export (external image needs CORS).");
+      return;
+    }
+    setStatus("Confirm in wallet…");
+    try {
+      await editArea(target, { imageUrl: dataUrl, destination, message: text.trim() });
+      setStatus("Banner placed on your area.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not place banner.");
     }
   }
 

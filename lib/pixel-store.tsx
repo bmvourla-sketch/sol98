@@ -6,49 +6,25 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
+import { PublicKey } from "@solana/web3.js";
 
-import { BOARD_SIZE, bulkBlockPrice, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
-import { airdropFor, HIJACK_VALUATION_DECAY } from "./token";
+import { areaPrice, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
+import { airdropFor, hijackCostInTokens } from "./token";
+import { PIXEL98_MINT } from "./solana";
+import { useBurnPixel98, useSendSolTransfer, useSignAuthMessage } from "./use-solana-tx";
+import type { AdContent, PixelData } from "./pixel-types";
 
-export type NeonTemplate = "none" | "cyberpunk-pulse" | "matrix" | "flashing" | "glitch" | "rainbow" | "sequential";
-
-/** The ad payload attached to a block (or a multi-block banner). */
-export interface AdContent {
-  destination: string; // destination link
-  imageUrl: string; // image / neon GIF
-  message: string; // tooltip message
-  neon: NeonTemplate; // neon banner template
-}
-
-export interface PixelData extends AdContent {
-  index: number; // 0-based board index
-  owner: string; // wallet public key (base58)
-  valuationSol: number; // current SOL valuation (decays on hijack)
-  purchasedAt: number; // epoch ms
-  isRented: boolean;
-  rentedTo?: string;
-  rentedUntil?: number;
-  listingPriceSol?: number; // set → for sale
-  rentPriceSol?: number; // set → for rent (per day)
-  // Multi-block banner grouping (spanning ad).
-  bannerGroupId?: string;
-  bannerCols?: number;
-  bannerRows?: number;
-  bannerX?: number; // 0-based col within the banner
-  bannerY?: number; // 0-based row within the banner
-}
+export type { AdContent, NeonTemplate, PixelData } from "./pixel-types";
 
 export type SyncState = "loading" | "live" | "offline";
 
-/** Proof for a board write: a verified transfer signature (SOL buy) or an
- *  explicit `mock` flag (SOL98, simulated hijack burn, market actions). */
-export interface WriteProof {
-  signature?: string;
-  mock?: boolean;
-}
+/** Awaiting-signature / confirming — surfaced so dialogs can show progress. */
+export type TxPhase = "awaiting_signature" | "processing" | null;
 
 interface PixelContextValue {
   pixels: Record<number, PixelData>;
@@ -56,74 +32,136 @@ interface PixelContextValue {
   nextPriceSol: number;
   totalRaisedSol: number;
   firstFreeIndex: number;
-  pixel98Balance: number;
-  sol98Balance: number;
-  spendSol98: (amount: number) => boolean;
-  claimSol98: (amount: number) => void;
   syncState: SyncState;
-  buyPixel: (index: number, owner: string, ad: AdContent, proof?: WriteProof) => void;
+  connectedOwner: string;
+  txPhase: TxPhase;
+  areaPriceFor: (count: number) => number;
+  hijackCostFor: (index: number) => number;
+
+  buyPixel: (index: number, ad: AdContent) => Promise<PixelData>;
   /** Buy a rectangular area of blocks as ONE banner (bigger area = bigger ad). */
-  buyArea: (indices: number[], owner: string, ad: AdContent, baseOverride?: number, proof?: WriteProof) => void;
-  /** Overtake a spot after a (real or simulated) burn. False if the spot vanished. */
-  hijackPixel: (index: number, hijacker: string) => boolean;
-  /** Deduct the mock $PIXEL98 balance (simulated-burn path only). */
-  spendPixel98: (amount: number) => boolean;
-  editPixel: (index: number, ad: Partial<AdContent>) => void;
+  buyArea: (indices: number[], ad: AdContent) => Promise<PixelData[]>;
+  /** Overtake a spot. Real verified burn once $PIXEL98 is live, simulated (rate-limited) before. */
+  hijackPixel: (index: number) => Promise<{ pixel: PixelData; simulated: boolean }>;
+  editPixel: (index: number, ad: Partial<AdContent>) => Promise<PixelData>;
   /** Apply an ad/banner to every block in a banner group. */
-  editArea: (groupId: string, ad: Partial<AdContent>) => void;
-  listForSale: (index: number, priceSol: number) => void;
-  buyListing: (index: number, buyer: string) => void;
-  listForRent: (index: number, priceSolPerDay: number) => void;
-  rentPixel: (index: number, renter: string, days: number) => void;
-  unlist: (index: number) => void;
-  claimPixel98: (amount: number) => void;
+  editArea: (groupId: string, ad: Partial<AdContent>) => Promise<PixelData[]>;
+  listForSale: (index: number, priceSol: number) => Promise<PixelData>;
+  /** Pays the CURRENT owner directly (peer-to-peer), then transfers ownership. */
+  buyListing: (index: number) => Promise<PixelData>;
+  listForRent: (index: number, priceSolPerDay: number) => Promise<PixelData>;
+  /** Pays the CURRENT owner directly for `days`. */
+  rentPixel: (index: number, days: number) => Promise<PixelData>;
+  unlist: (index: number) => Promise<PixelData>;
   spotsOwnedBy: (owner: string) => number;
   airdropForOwner: (owner: string) => number;
 }
 
 // localStorage now acts as an offline CACHE only — the server API is the
 // source of truth so every user sees the same global board.
-const PIXEL_CACHE_KEY = "sol98-pixels-cache-v3";
-const BALANCE_STORAGE_KEY = "sol98-pixel98-balance-v1";
+const PIXEL_CACHE_KEY = "sol98-pixels-cache-v4";
 const API_URL = process.env.NEXT_PUBLIC_PIXELS_API_URL || "/api/pixels";
 const POLL_MS = 20_000;
 
 const PixelContext = createContext<PixelContextValue | null>(null);
 
-function load<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
+function loadCache(): Record<number, PixelData> {
+  if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
+    const raw = window.localStorage.getItem(PIXEL_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as Record<number, PixelData>) : {};
   } catch {
-    return fallback;
+    return {};
   }
 }
 
-function save(key: string, value: unknown): void {
+function saveCache(value: Record<number, PixelData>): void {
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(PIXEL_CACHE_KEY, JSON.stringify(value));
   } catch {
     // ignore quota/private-mode errors
   }
 }
 
-export function PixelProvider({ children }: { children: ReactNode }) {
-  const [pixels, setPixels] = useState<Record<number, PixelData>>({});
-  const [balance, setBalance] = useState(0);
-  const [sol98Balance, setSol98Balance] = useState(100000);
-  const [syncState, setSyncState] = useState<SyncState>("loading");
+/** Shallow value-equality for one pixel record (cheap — flat-ish object). */
+function pixelsEqual(a: PixelData | undefined, b: PixelData | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const keysA = Object.keys(a) as (keyof PixelData)[];
+  const keysB = Object.keys(b) as (keyof PixelData)[];
+  if (keysA.length !== keysB.length) return false;
+  return keysA.every((key) => a[key] === b[key]);
+}
 
-  useEffect(() => setPixels(load(PIXEL_CACHE_KEY, {})), []);
-  useEffect(() => setBalance(load(BALANCE_STORAGE_KEY, 0)), []);
+/**
+ * Merges a freshly-fetched (full) board snapshot into `prev`. Two levels of
+ * "don't re-render for nothing":
+ *  1. Per-pixel: a key whose value is unchanged keeps `prev`'s OBJECT
+ *     REFERENCE (not the new-but-equal one from `incoming`), so React.memo
+ *     on PixelCell can actually skip re-rendering that one cell.
+ *  2. Whole-board: if NO key changed at all, returns `prev` itself unchanged
+ *     — the 20s poll used to always produce a brand-new top-level object
+ *     (and therefore a new `pixels` reference), forcing all 10,000 board
+ *     cells to re-render on a timer even when nothing had moved.
+ */
+function mergePixels(
+  prev: Record<number, PixelData>,
+  incoming: Record<number, PixelData>
+): Record<number, PixelData> {
+  let anyChanged = false;
+  const next: Record<number, PixelData> = {};
+  for (const key in incoming) {
+    const index = Number(key);
+    const incomingPixel = incoming[index];
+    const prevPixel = prev[index];
+    if (pixelsEqual(prevPixel, incomingPixel)) {
+      next[index] = prevPixel;
+    } else {
+      next[index] = incomingPixel;
+      anyChanged = true;
+    }
+  }
+  if (!anyChanged && Object.keys(prev).length === Object.keys(next).length) {
+    return prev;
+  }
+  return next;
+}
+
+async function postAction<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+  const res = await fetch(API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const json = (await res.json().catch(() => ({}))) as { error?: string } & T;
+  if (!res.ok) {
+    throw new Error(json.error || `request failed (${res.status})`);
+  }
+  return json;
+}
+
+export function PixelProvider({ children }: { children: ReactNode }) {
+  const { publicKey, connected } = useWallet();
+  const sendSol = useSendSolTransfer();
+  const signAuthMessage = useSignAuthMessage();
+  const burnPixel98 = useBurnPixel98();
+
+  const [pixels, setPixels] = useState<Record<number, PixelData>>({});
+  const [syncState, setSyncState] = useState<SyncState>("loading");
+  const [txPhase, setTxPhase] = useState<TxPhase>(null);
+  const hydrated = useRef(false);
+
+  useEffect(() => {
+    setPixels(loadCache());
+    hydrated.current = true;
+  }, []);
 
   const fetchPixels = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}?t=${Date.now()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { pixels?: Record<number, PixelData> };
-      setPixels((prev) => ({ ...prev, ...(data.pixels ?? {}) }));
+      setPixels((prev) => mergePixels(prev, data.pixels ?? {}));
       setSyncState("live");
     } catch {
       setSyncState("offline");
@@ -141,250 +179,203 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     };
   }, [fetchPixels]);
 
-  useEffect(() => save(PIXEL_CACHE_KEY, pixels), [pixels]);
-  useEffect(() => save(BALANCE_STORAGE_KEY, balance), [balance]);
+  useEffect(() => {
+    if (hydrated.current) saveCache(pixels);
+  }, [pixels]);
 
-  const syncPixel = useCallback(async (pixel: PixelData, proof?: WriteProof) => {
-    try {
-      await fetch(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pixel,
-          signature: proof?.signature ?? null,
-          mock: proof?.mock ?? false,
-        }),
-      });
-    } catch {
-      // offline — stays in the local cache until the next successful fetch
-    }
-  }, []);
+  const owner = publicKey?.toBase58() ?? "";
 
-  const upsert = useCallback(
-    (pixel: PixelData, proof?: WriteProof) => {
-      setPixels((prev) => ({ ...prev, [pixel.index]: pixel }));
-      void syncPixel(pixel, proof);
+  const requireWallet = useCallback((): string => {
+    if (!connected || !publicKey) throw new Error("Wallet not connected");
+    return publicKey.toBase58();
+  }, [connected, publicKey]);
+
+  /** Sends a real SOL transfer (treasury by default) and returns its signature. */
+  const sendTransfer = useCallback(
+    async (amountSol: number, recipient?: PublicKey): Promise<string> => {
+      setTxPhase("awaiting_signature");
+      return sendSol(amountSol, () => setTxPhase("processing"), recipient);
     },
-    [syncPixel]
+    [sendSol]
   );
 
-  const buyArea = useCallback(
-    (indices: number[], owner: string, ad: AdContent, baseOverride?: number, proof?: WriteProof) => {
-      const base = baseOverride ?? Object.keys(pixels).length;
-      const groupId = `b-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-
-      const cols = indices.map((i) => i % BOARD_SIZE);
-      const rows = indices.map((i) => Math.floor(i / BOARD_SIZE));
-      const minCol = Math.min(...cols);
-      const minRow = Math.min(...rows);
-      const bannerCols = Math.max(...cols) - minCol + 1;
-      const bannerRows = Math.max(...rows) - minRow + 1;
-
-      setPixels((prev) => {
-        const next = { ...prev };
-        indices.forEach((index, k) => {
-          next[index] = {
-            index,
-            owner,
-            destination: ad.destination,
-            imageUrl: ad.imageUrl,
-            message: ad.message,
-            neon: ad.neon,
-            valuationSol: bulkBlockPrice(base, k),
-            purchasedAt: Date.now(),
-            isRented: false,
-            bannerGroupId: groupId,
-            bannerCols,
-            bannerRows,
-            bannerX: (index % BOARD_SIZE) - minCol,
-            bannerY: Math.floor(index / BOARD_SIZE) - minRow,
-          };
-        });
-        return next;
-      });
-
-      indices.forEach((index, k) => {
-        void syncPixel(
-          {
-            index,
-            owner,
-            destination: ad.destination,
-            imageUrl: ad.imageUrl,
-            message: ad.message,
-            neon: ad.neon,
-            valuationSol: bulkBlockPrice(base, k),
-            purchasedAt: Date.now(),
-            isRented: false,
-            bannerGroupId: groupId,
-            bannerCols,
-            bannerRows,
-            bannerX: (index % BOARD_SIZE) - minCol,
-            bannerY: Math.floor(index / BOARD_SIZE) - minRow,
-          },
-          proof
-        );
-      });
+  /** Signs the free-action auth message — no funds move. */
+  const signAuth = useCallback(
+    async (action: string, index: number | number[]) => {
+      const proof = await signAuthMessage(action, index);
+      return { authTimestamp: proof.timestamp, authSignature: proof.signature };
     },
-    [pixels, syncPixel]
+    [signAuthMessage]
+  );
+
+  const soldCount = Object.keys(pixels).length;
+
+  const buyArea = useCallback(
+    async (indices: number[], ad: AdContent): Promise<PixelData[]> => {
+      const actor = requireWallet();
+      const price = areaPrice(soldCount, indices.length);
+      try {
+        const signature = await sendTransfer(price);
+        const result = await postAction<{ pixels: PixelData[] }>("buy-area", {
+          actor,
+          indices,
+          signature,
+          ad,
+        });
+        setPixels((prev) => {
+          const next = { ...prev };
+          for (const p of result.pixels) next[p.index] = p;
+          return next;
+        });
+        return result.pixels;
+      } finally {
+        setTxPhase(null);
+      }
+    },
+    [requireWallet, sendTransfer, soldCount]
   );
 
   const buyPixel = useCallback(
-    (index: number, owner: string, ad: AdContent, proof?: WriteProof) => {
-      buyArea([index], owner, ad, undefined, proof);
+    async (index: number, ad: AdContent): Promise<PixelData> => {
+      const [pixel] = await buyArea([index], ad);
+      return pixel;
     },
     [buyArea]
   );
 
   const hijackPixel = useCallback(
-    (index: number, hijacker: string): boolean => {
+    async (index: number): Promise<{ pixel: PixelData; simulated: boolean }> => {
+      const actor = requireWallet();
       const target = pixels[index];
-      if (!target) return false;
-      upsert(
-        {
-          ...target,
-          owner: hijacker,
-          valuationSol: target.valuationSol * (1 - HIJACK_VALUATION_DECAY),
-          destination: "",
-          imageUrl: "",
-          message: "",
-          neon: "none",
-          purchasedAt: Date.now(),
-          isRented: false,
-          rentedTo: undefined,
-          rentedUntil: undefined,
-          listingPriceSol: undefined,
-          rentPriceSol: undefined,
-          bannerGroupId: undefined,
-          bannerCols: undefined,
-          bannerRows: undefined,
-          bannerX: undefined,
-          bannerY: undefined,
-        },
-        { mock: true }
-      );
-      return true;
-    },
-    [pixels, upsert]
-  );
+      if (!target) throw new Error("Nothing to hijack there yet");
+      const tokenLive = Boolean(PIXEL98_MINT);
+      const hijackCost = hijackCostInTokens(target.valuationSol);
 
-  const spendPixel98 = useCallback(
-    (amount: number): boolean => {
-      if (balance < amount) return false;
-      setBalance((prev) => prev - amount);
-      return true;
+      try {
+        if (tokenLive) {
+          setTxPhase("awaiting_signature");
+          const outcome = await burnPixel98(hijackCost, () => setTxPhase("processing"));
+          const result = await postAction<{ pixel: PixelData; simulated: boolean }>("hijack", {
+            actor,
+            index,
+            signature: outcome.signature,
+          });
+          setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+          return result;
+        }
+
+        const auth = await signAuth("hijack", index);
+        const result = await postAction<{ pixel: PixelData; simulated: boolean }>("hijack", {
+          actor,
+          index,
+          ...auth,
+        });
+        setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+        return result;
+      } finally {
+        setTxPhase(null);
+      }
     },
-    [balance]
+    [requireWallet, pixels, burnPixel98, signAuth]
   );
 
   const editPixel = useCallback(
-    (index: number, ad: Partial<AdContent>) => {
-      const cur = pixels[index];
-      if (!cur) return;
-      upsert({ ...cur, ...ad });
+    async (index: number, ad: Partial<AdContent>): Promise<PixelData> => {
+      const actor = requireWallet();
+      const auth = await signAuth("edit", index);
+      const result = await postAction<{ pixel: PixelData }>("edit", { actor, index, ad, ...auth });
+      setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+      return result.pixel;
     },
-    [pixels, upsert]
+    [requireWallet, signAuth]
   );
 
   const editArea = useCallback(
-    (groupId: string, ad: Partial<AdContent>) => {
-      const updated: PixelData[] = [];
-      for (const key in pixels) {
-        if (pixels[key].bannerGroupId === groupId) {
-          updated.push({ ...pixels[key], ...ad });
-        }
-      }
-      if (updated.length === 0) return;
+    async (groupId: string, ad: Partial<AdContent>): Promise<PixelData[]> => {
+      const actor = requireWallet();
+      const auth = await signAuth("edit-area", -1);
+      const result = await postAction<{ pixels: PixelData[] }>("edit-area", { actor, groupId, ad, ...auth });
       setPixels((prev) => {
         const next = { ...prev };
-        for (const p of updated) next[p.index] = p;
+        for (const p of result.pixels) next[p.index] = p;
         return next;
       });
-      for (const p of updated) void syncPixel(p);
+      return result.pixels;
     },
-    [pixels, syncPixel]
+    [requireWallet, signAuth]
   );
 
   const listForSale = useCallback(
-    (index: number, priceSol: number) => {
-      const cur = pixels[index];
-      if (!cur) return;
-      upsert({ ...cur, listingPriceSol: priceSol, rentPriceSol: undefined });
+    async (index: number, priceSol: number): Promise<PixelData> => {
+      const actor = requireWallet();
+      const auth = await signAuth("list-sale", index);
+      const result = await postAction<{ pixel: PixelData }>("list-sale", { actor, index, priceSol, ...auth });
+      setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+      return result.pixel;
     },
-    [pixels, upsert]
-  );
-
-  const buyListing = useCallback(
-    (index: number, buyer: string) => {
-      const cur = pixels[index];
-      if (!cur) return;
-      upsert(
-        {
-          ...cur,
-          owner: buyer,
-          destination: "",
-          imageUrl: "",
-          message: "",
-          neon: "none",
-          purchasedAt: Date.now(),
-          isRented: false,
-          listingPriceSol: undefined,
-          rentPriceSol: undefined,
-          valuationSol: cur.listingPriceSol ?? cur.valuationSol,
-        },
-        { mock: true }
-      );
-    },
-    [pixels, upsert]
+    [requireWallet, signAuth]
   );
 
   const listForRent = useCallback(
-    (index: number, priceSolPerDay: number) => {
-      const cur = pixels[index];
-      if (!cur) return;
-      upsert({ ...cur, rentPriceSol: priceSolPerDay, listingPriceSol: undefined });
-    },
-    [pixels, upsert]
-  );
-
-  const rentPixel = useCallback(
-    (index: number, renter: string, days: number) => {
-      const cur = pixels[index];
-      if (!cur) return;
-      upsert({
-        ...cur,
-        isRented: true,
-        rentedTo: renter,
-        rentedUntil: Date.now() + days * 24 * 60 * 60 * 1000,
-        rentPriceSol: undefined,
+    async (index: number, priceSolPerDay: number): Promise<PixelData> => {
+      const actor = requireWallet();
+      const auth = await signAuth("list-rent", index);
+      const result = await postAction<{ pixel: PixelData }>("list-rent", {
+        actor,
+        index,
+        priceSolPerDay,
+        ...auth,
       });
+      setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+      return result.pixel;
     },
-    [pixels, upsert]
+    [requireWallet, signAuth]
   );
 
   const unlist = useCallback(
-    (index: number) => {
-      const cur = pixels[index];
-      if (!cur) return;
-      upsert({ ...cur, listingPriceSol: undefined, rentPriceSol: undefined });
+    async (index: number): Promise<PixelData> => {
+      const actor = requireWallet();
+      const auth = await signAuth("unlist", index);
+      const result = await postAction<{ pixel: PixelData }>("unlist", { actor, index, ...auth });
+      setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+      return result.pixel;
     },
-    [pixels, upsert]
+    [requireWallet, signAuth]
   );
 
-  const claimPixel98 = useCallback((amount: number) => {
-    setBalance((prev) => prev + amount);
-  }, []);
+  const buyListing = useCallback(
+    async (index: number): Promise<PixelData> => {
+      const actor = requireWallet();
+      const current = pixels[index];
+      if (!current || current.listingPriceSol === undefined) throw new Error("Not listed for sale");
+      try {
+        const signature = await sendTransfer(current.listingPriceSol, new PublicKey(current.owner));
+        const result = await postAction<{ pixel: PixelData }>("buy-listing", { actor, index, signature });
+        setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+        return result.pixel;
+      } finally {
+        setTxPhase(null);
+      }
+    },
+    [requireWallet, pixels, sendTransfer]
+  );
 
-  const spendSol98 = useCallback((amount: number): boolean => {
-    if (sol98Balance < amount) return false;
-    setSol98Balance((prev) => prev - amount);
-    return true;
-  }, [sol98Balance]);
-
-  const claimSol98 = useCallback((amount: number) => {
-    setSol98Balance((prev) => prev + amount);
-  }, []);
-
-  const soldCount = Object.keys(pixels).length;
+  const rentPixel = useCallback(
+    async (index: number, days: number): Promise<PixelData> => {
+      const actor = requireWallet();
+      const current = pixels[index];
+      if (!current || current.rentPriceSol === undefined) throw new Error("Not listed for rent");
+      try {
+        const signature = await sendTransfer(current.rentPriceSol * days, new PublicKey(current.owner));
+        const result = await postAction<{ pixel: PixelData }>("rent", { actor, index, days, signature });
+        setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+        return result.pixel;
+      } finally {
+        setTxPhase(null);
+      }
+    },
+    [requireWallet, pixels, sendTransfer]
+  );
 
   const firstFreeIndex = useMemo(() => {
     for (let i = 0; i < TOTAL_SPOTS; i++) {
@@ -394,20 +385,23 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   }, [pixels]);
 
   const spotsOwnedBy = useCallback(
-    (owner: string) => {
-      if (!owner) return 0;
+    (who: string) => {
+      if (!who) return 0;
       let n = 0;
       for (const key in pixels) {
-        if (pixels[key].owner === owner) n++;
+        if (pixels[key].owner === who) n++;
       }
       return n;
     },
     [pixels]
   );
 
-  const airdropForOwner = useCallback(
-    (owner: string) => airdropFor(spotsOwnedBy(owner)),
-    [spotsOwnedBy]
+  const airdropForOwner = useCallback((who: string) => airdropFor(spotsOwnedBy(who)), [spotsOwnedBy]);
+
+  const areaPriceFor = useCallback((count: number) => areaPrice(soldCount, count), [soldCount]);
+  const hijackCostFor = useCallback(
+    (index: number) => (pixels[index] ? hijackCostInTokens(pixels[index].valuationSol) : 0),
+    [pixels]
   );
 
   const value = useMemo<PixelContextValue>(
@@ -417,15 +411,14 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       nextPriceSol: nextSpotPrice(soldCount),
       totalRaisedSol: totalRaisedSol(soldCount),
       firstFreeIndex,
-      pixel98Balance: balance,
-      sol98Balance,
-      spendSol98,
-      claimSol98,
       syncState,
+      connectedOwner: owner,
+      txPhase,
+      areaPriceFor,
+      hijackCostFor,
       buyPixel,
       buyArea,
       hijackPixel,
-      spendPixel98,
       editPixel,
       editArea,
       listForSale,
@@ -433,7 +426,6 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       listForRent,
       rentPixel,
       unlist,
-      claimPixel98,
       spotsOwnedBy,
       airdropForOwner,
     }),
@@ -441,15 +433,14 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       pixels,
       soldCount,
       firstFreeIndex,
-      balance,
-      sol98Balance,
-      spendSol98,
-      claimSol98,
       syncState,
+      owner,
+      txPhase,
+      areaPriceFor,
+      hijackCostFor,
       buyPixel,
       buyArea,
       hijackPixel,
-      spendPixel98,
       editPixel,
       editArea,
       listForSale,
@@ -457,7 +448,6 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       listForRent,
       rentPixel,
       unlist,
-      claimPixel98,
       spotsOwnedBy,
       airdropForOwner,
     ]

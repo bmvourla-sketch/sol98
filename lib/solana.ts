@@ -36,6 +36,25 @@ export function getSolanaRpcEndpoint(): string {
   );
 }
 
+/**
+ * Server-only RPC endpoint used to VERIFY transactions in the API routes.
+ * Prefers a private `SOLANA_RPC_URL` (not exposed to the client bundle —
+ * keeps verification traffic off the public endpoint the browser uses, and
+ * lets you point it at a dedicated provider without a client rebuild) and
+ * falls back to the same endpoint the client uses.
+ */
+export function getServerSolanaRpcEndpoint(): string {
+  return process.env.SOLANA_RPC_URL?.trim() || getSolanaRpcEndpoint();
+}
+
+export function solToLamports(sol: number): number {
+  return Math.round(sol * LAMPORTS_PER_SOL);
+}
+
+export function lamportsToSol(lamports: number): number {
+  return lamports / LAMPORTS_PER_SOL;
+}
+
 /** The treasury as a `PublicKey`, throwing a clear setup error when unset. */
 export function getTreasuryPublicKey(): PublicKey {
   if (!TREASURY_ADDRESS) {

@@ -9,6 +9,8 @@ interface PixelCellProps {
   index: number;
   pixel?: PixelData;
   selected?: boolean;
+  onSelectStart: (index: number) => void;
+  onSelectMove: (index: number) => void;
 }
 
 const NEON_CLASS: Partial<Record<NeonTemplate, string>> = {
@@ -21,15 +23,16 @@ const NEON_CLASS: Partial<Record<NeonTemplate, string>> = {
 };
 
 /**
- * A single 10×10-pixel block. Selection is handled at the board level with
- * pointer events (so it works on both mouse and touch); this cell is purely
- * presentational — it renders the ad image (spanning across the banner when
- * part of a multi-block purchase) + neon template.
+ * A single 10×10-pixel block. Drag across cells to select a rectangular area;
+ * releasing opens the buy dialog. Owned cells render the ad image (spanning
+ * across the banner when part of a multi-block purchase) + neon template.
  */
 export const PixelCell = memo(function PixelCell({
   index,
   pixel,
   selected,
+  onSelectStart,
+  onSelectMove,
 }: PixelCellProps) {
   const neonClass = pixel && pixel.neon !== "none" ? NEON_CLASS[pixel.neon] ?? "" : "";
 
@@ -58,6 +61,10 @@ export const PixelCell = memo(function PixelCell({
       type="button"
       className={`pixel-cell${pixel ? " owned" : ""}${neonClass ? ` ${neonClass}` : ""}`}
       style={style}
+      onMouseDown={(e) => {
+        if (e.button === 0) onSelectStart(index);
+      }}
+      onMouseEnter={() => onSelectMove(index)}
       aria-label={pixel ? `Pixel ${index + 1} — ${pixel.owner}` : `Pixel ${index + 1} — buy`}
     >
       {pixel && (

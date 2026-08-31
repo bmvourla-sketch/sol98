@@ -2,11 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   areaPrice,
-  bulkBlockPrice,
-  bulkPriceBreakdown,
   INITIAL_PRICE_SOL,
   nextSpotPrice,
-  PRICE_STEP_EVERY,
   spotPrice,
   totalRaisedSol,
   TOTAL_SPOTS,
@@ -43,39 +40,37 @@ describe("bonding curve", () => {
   });
 });
 
-describe("bulk pricing (steps +10% every 10 blocks)", () => {
-  it("single block area costs the current spot price", () => {
-    expect(areaPrice(0, 1)).toBeCloseTo(0.2);
+describe("areaPrice — no bulk-buy arbitrage", () => {
+  it("buying 1 block via areaPrice matches spotPrice", () => {
+    expect(areaPrice(0, 1)).toBeCloseTo(spotPrice(1));
+    expect(areaPrice(5, 1)).toBeCloseTo(spotPrice(6));
   });
 
-  it("first 10 blocks cost the flat current price", () => {
-    expect(areaPrice(0, 10)).toBeCloseTo(2.0);
+  it("buying N blocks costs the SAME as buying them one at a time in sequence", () => {
+    const soldCount = 7;
+    const count = 12;
+    let sequential = 0;
+    for (let k = 1; k <= count; k++) sequential += spotPrice(soldCount + k);
+    expect(areaPrice(soldCount, count)).toBeCloseTo(sequential, 9);
   });
 
-  it("blocks 11-20 cost +10% (10 @ 0.2 + 10 @ 0.22)", () => {
-    expect(areaPrice(0, 20)).toBeCloseTo(4.2);
+  it("matches the closed-form totalRaisedSol difference", () => {
+    expect(areaPrice(3, 4)).toBeCloseTo(totalRaisedSol(7) - totalRaisedSol(3), 9);
   });
 
-  it("bulkBlockPrice steps every 10 blocks", () => {
-    expect(bulkBlockPrice(0, 0)).toBeCloseTo(0.2);
-    expect(bulkBlockPrice(0, 9)).toBeCloseTo(0.2);
-    expect(bulkBlockPrice(0, 10)).toBeCloseTo(0.22);
-    expect(bulkBlockPrice(0, 20)).toBeCloseTo(0.242);
+  it("bulk buying is NOT cheaper per-block than buying one at a time (no arbitrage)", () => {
+    const soldCount = 10;
+    const count = 5;
+    const bulkTotal = areaPrice(soldCount, count);
+    // The old (buggy) behavior charged `count * nextSpotPrice(soldCount)` for
+    // the whole area — strictly less than the true integrated price for any
+    // count > 1, since price only ever goes up. Assert we're NOT doing that.
+    const oldBuggyFlatPrice = count * nextSpotPrice(soldCount);
+    expect(bulkTotal).toBeGreaterThan(oldBuggyFlatPrice);
   });
 
-  it("uses the next spot price as the base when blocks are already sold", () => {
-    expect(areaPrice(1, 10)).toBeCloseTo(2.2);
-  });
-
-  it("bulkPriceBreakdown returns one tier per 10 blocks", () => {
-    const tiers = bulkPriceBreakdown(0, 25);
-    expect(tiers).toHaveLength(3);
-    expect(tiers[0]).toMatchObject({ from: 1, to: 10, count: 10 });
-    expect(tiers[1]).toMatchObject({ from: 11, to: 20, count: 10 });
-    expect(tiers[2]).toMatchObject({ from: 21, to: 25, count: 5 });
-    expect(tiers[0].unitPrice).toBeCloseTo(0.2);
-    expect(tiers[1].unitPrice).toBeCloseTo(0.22);
-    expect(tiers[2].unitPrice).toBeCloseTo(0.242);
-    expect(PRICE_STEP_EVERY).toBe(10);
+  it("zero or negative count costs nothing", () => {
+    expect(areaPrice(0, 0)).toBe(0);
+    expect(areaPrice(5, -3)).toBe(0);
   });
 });

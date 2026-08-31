@@ -31,47 +31,20 @@ export function totalRaisedSol(soldCount: number): number {
 }
 
 /**
- * Bulk (multi-block) purchases step the price up every `PRICE_STEP_EVERY`
- * blocks, so a huge area can't be bought entirely at the flat current price.
- */
-export const PRICE_STEP_EVERY = 10;
-
-/** Price of the k-th block (0-based) within a single bulk purchase. */
-export function bulkBlockPrice(soldCount: number, k: number): number {
-  const step = Math.floor(k / PRICE_STEP_EVERY);
-  return nextSpotPrice(soldCount) * Math.pow(1 + PRICE_INCREASE, step);
-}
-
-/**
- * Total SOL to buy `count` blocks in one purchase. The first 10 blocks cost
- * the current `nextSpotPrice`, the next 10 cost +10%, and so on — the price
- * steps up every 10 blocks (and again, +10%, after the whole purchase).
+ * Total SOL to buy `count` blocks starting right after `soldCount` already
+ * sold. Each block in the purchase is priced at ITS OWN position on the
+ * bonding curve (soldCount+1, soldCount+2, ... soldCount+count) — i.e. the
+ * exact same total you'd pay buying the blocks one at a time in sequence.
+ *
+ * (An earlier version charged every block in a bulk purchase the single
+ * `nextSpotPrice`, which made buying in bulk strictly cheaper than buying
+ * the same blocks one-by-one — a real arbitrage against the bonding curve.
+ * This closed form matches `totalRaisedSol`, so there's no discount either
+ * way: areaPrice(N, k) === totalRaisedSol(N + k) - totalRaisedSol(N).)
  */
 export function areaPrice(soldCount: number, count: number): number {
-  let total = 0;
-  for (let k = 0; k < count; k++) total += bulkBlockPrice(soldCount, k);
-  return total;
-}
-
-/** One price tier of a bulk purchase (for the checkout breakdown). */
-export interface BulkPriceTier {
-  from: number; // 1-based first block in this tier
-  to: number; // 1-based last block in this tier
-  count: number;
-  unitPrice: number;
-  subtotal: number;
-}
-
-/** Per-10-block tiers for `count` blocks, with unit price and subtotal. */
-export function bulkPriceBreakdown(soldCount: number, count: number): BulkPriceTier[] {
-  const tiers: BulkPriceTier[] = [];
-  for (let k = 0; k < count; k += PRICE_STEP_EVERY) {
-    const to = Math.min(count, k + PRICE_STEP_EVERY);
-    const n = to - k;
-    const unitPrice = bulkBlockPrice(soldCount, k);
-    tiers.push({ from: k + 1, to, count: n, unitPrice, subtotal: n * unitPrice });
-  }
-  return tiers;
+  if (count <= 0) return 0;
+  return totalRaisedSol(soldCount + count) - totalRaisedSol(soldCount);
 }
 
 /** Human-friendly SOL formatting; shows more decimals for sub-1-SOL amounts. */

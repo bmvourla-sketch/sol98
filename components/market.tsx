@@ -5,20 +5,22 @@ import { useWallet } from "@solana/wallet-adapter-react";
 
 import { usePixels } from "@/lib/pixel-store";
 import { formatSol } from "@/lib/pricing";
-import { TOKEN_SYMBOL } from "@/lib/token";
 import { isTokenLive, shortenAddress } from "@/lib/solana";
 import { PixelDialog } from "./pixel-dialog";
 
 /**
- * Market.exe — buy, rent, or sell ad spots. Shows the mock $PIXEL98 balance
- * (with a test faucet), your owned spots, and the open listings for sale/rent.
- * All actions route through the mock transaction handler.
+ * Market.exe — buy, rent, or sell ad spots. "Buy"/"Rent" here send a REAL
+ * peer-to-peer SOL payment straight to the current owner's wallet (not the
+ * treasury) before the server transfers ownership/rental — there is no free
+ * path through this screen.
  */
 export function Market() {
   const { publicKey, connected } = useWallet();
   const ctx = usePixels();
   const owner = publicKey?.toBase58() ?? "";
   const [dialogIndex, setDialogIndex] = useState<number | null>(null);
+  const [busyIndex, setBusyIndex] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const mySpots = Object.values(ctx.pixels).filter((p) => p.owner === owner);
   const forSale = Object.values(ctx.pixels).filter(
@@ -28,42 +30,57 @@ export function Market() {
     (p) => p.rentPriceSol !== undefined && p.owner !== owner
   );
 
-  function buyListing(index: number) {
+  async function buyListing(index: number) {
     if (!connected || !owner) return;
-    ctx.buyListing(index, owner);
+    setError(null);
+    setBusyIndex(index);
+    try {
+      await ctx.buyListing(index);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Purchase failed");
+    } finally {
+      setBusyIndex(null);
+    }
   }
 
-  function rent(index: number) {
+  async function rent(index: number) {
     if (!connected || !owner) return;
-    ctx.rentPixel(index, owner, 30);
+    setError(null);
+    setBusyIndex(index);
+    try {
+      await ctx.rentPixel(index, 30);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rent failed");
+    } finally {
+      setBusyIndex(null);
+    }
   }
 
-  function listForRent(index: number) {
-    ctx.listForRent(index, 0.05); // mock default 0.05 SOL/day
+  async function listForRent(index: number) {
+    setError(null);
+    try {
+      await ctx.listForRent(index, 0.05); // default 0.05 SOL/day — owner can relist at any price via Manage
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not list for rent");
+    }
   }
 
   return (
     <div className="flex h-full flex-col gap-2 overflow-auto bg-[#c0c0c0] p-2 text-xs">
-      {/* Token balance + faucet + airdrop (gated until Pump.fun launch) */}
-      {isTokenLive() ? (
-        <div className="bevel-in flex flex-wrap items-center gap-3 px-2 py-1">
+      {/* Hijack / $PIXEL98 status (informational — nothing here is spendable) */}
+      <div className="bevel-in flex flex-wrap items-center gap-3 px-2 py-1 text-[#808080]">
+        {isTokenLive() ? (
           <span>
-            {TOKEN_SYMBOL} balance: <b>{ctx.pixel98Balance}</b>
+            $PIXEL98 is live — hijacks burn real tokens. Airdrop:{" "}
+            <b>{ctx.airdropForOwner(owner)}</b> $PIXEL98 ({ctx.spotsOwnedBy(owner)} spots)
           </span>
-          <button type="button" className="win98-button !px-2 !py-0" onClick={() => ctx.claimPixel98(10000)}>
-            Claim 10,000 test {TOKEN_SYMBOL}
-          </button>
-          <span className="ml-auto text-[#808080]">
-            Airdrop: {ctx.airdropForOwner(owner)} {TOKEN_SYMBOL} ({ctx.spotsOwnedBy(owner)} spots)
-          </span>
-        </div>
-      ) : (
-        <div className="bevel-in px-2 py-1 text-xs text-[#808080]">
-          {TOKEN_SYMBOL} · Airdrop · Hijack — Coming Soon (Pump.fun launch)
-        </div>
-      )}
+        ) : (
+          <span>$PIXEL98 · Airdrop · real Hijack burns — Coming Soon (Pump.fun launch)</span>
+        )}
+      </div>
 
       {!connected && <div className="text-[#800000]">Connect wallet to use the market.</div>}
+      {error && <div className="bevel-in px-2 py-1 text-[#800000]">{error}</div>}
 
       {/* My spots */}
       <div className="bevel-out px-2 py-1 font-bold">My Spots ({mySpots.length})</div>
@@ -99,8 +116,13 @@ export function Market() {
           <span>#{p.index + 1}</span>
           <span className="text-[#808080]">{shortenAddress(p.owner, 4)}</span>
           <span>@ {formatSol(p.listingPriceSol ?? 0)} SOL</span>
-          <button type="button" className="win98-button !px-2 !py-0 ml-auto" onClick={() => buyListing(p.index)}>
-            Buy
+          <button
+            type="button"
+            className="win98-button !px-2 !py-0 ml-auto"
+            onClick={() => buyListing(p.index)}
+            disabled={busyIndex === p.index}
+          >
+            {busyIndex === p.index ? "Paying…" : "Buy"}
           </button>
         </div>
       ))}
@@ -113,8 +135,13 @@ export function Market() {
           <span>#{p.index + 1}</span>
           <span className="text-[#808080]">{shortenAddress(p.owner, 4)}</span>
           <span>{formatSol(p.rentPriceSol ?? 0)} SOL/day</span>
-          <button type="button" className="win98-button !px-2 !py-0 ml-auto" onClick={() => rent(p.index)}>
-            Rent 30d
+          <button
+            type="button"
+            className="win98-button !px-2 !py-0 ml-auto"
+            onClick={() => rent(p.index)}
+            disabled={busyIndex === p.index}
+          >
+            {busyIndex === p.index ? "Paying…" : "Rent 30d"}
           </button>
         </div>
       ))}

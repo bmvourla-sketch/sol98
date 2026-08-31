@@ -6,22 +6,19 @@ import { FileText, X } from "lucide-react";
 
 import { useDocuments, type DocumentData } from "@/lib/document-store";
 import { shortenAddress } from "@/lib/solana";
-import { useSendSolTransfer } from "@/lib/use-solana-tx";
+import { DOCUMENT_PRICE_SOL } from "@/lib/document-types";
 import { Win98Alert } from "./win98-alert";
-
-const DOCUMENT_PRICE_SOL = 0.2;
 
 type TxStatus = "idle" | "awaiting_signature" | "processing" | "success" | "failed";
 
 /**
  * Board.exe — the "document sale" ad-tool. Buy a named document with custom
- * content; documents appear as files and open in a notepad. This is a separate
- * ad feature from the pixel board.
+ * content; documents appear as files and open in a notepad, shared with
+ * every visitor (persisted server-side, not just this browser).
  */
 export function DocumentSale() {
   const { documents, buyDocument } = useDocuments();
   const { publicKey, connected } = useWallet();
-  const sendSol = useSendSolTransfer();
 
   const [buyOpen, setBuyOpen] = useState(false);
   const [viewDoc, setViewDoc] = useState<DocumentData | null>(null);
@@ -39,13 +36,12 @@ export function DocumentSale() {
     }
     setTxStatus("awaiting_signature");
     try {
-      const signature = await sendSol(DOCUMENT_PRICE_SOL, () => setTxStatus("processing"));
+      const doc = await buyDocument(name, content);
       setTxStatus("success");
-      buyDocument(name, content, publicKey.toBase58());
       setAlert({
         kind: "success",
         title: "Document Purchased",
-        message: `"${name.trim() || "Untitled"}" is yours.\n\nTx: ${signature}`,
+        message: `"${doc.name}" is yours and visible to everyone.`,
       });
     } catch (error) {
       setTxStatus("failed");
@@ -95,7 +91,7 @@ export function DocumentSale() {
       {/* Buy dialog */}
       {buyOpen && (
         <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/25 p-3">
-          <div className="win98-window bevel-out w-[min(360px,calc(100vw-1.5rem))]">
+          <div className="win98-window bevel-out w-[360px]">
             <div className="win98-titlebar">
               <span className="flex-1 truncate text-[12px]">Buy Document</span>
               <button type="button" className="win98-title-button" onClick={() => setBuyOpen(false)} aria-label="Close">
@@ -130,7 +126,7 @@ export function DocumentSale() {
       {/* View dialog (notepad) */}
       {viewDoc && (
         <div className="absolute inset-0 z-[200] flex items-center justify-center bg-black/25 p-3">
-          <div className="win98-window bevel-out w-[min(420px,calc(100vw-1.5rem))]">
+          <div className="win98-window bevel-out w-[420px]">
             <div className="win98-titlebar">
               <span className="flex-1 truncate text-[12px]">{viewDoc.name}</span>
               <button type="button" className="win98-title-button" onClick={() => setViewDoc(null)} aria-label="Close">
