@@ -460,7 +460,6 @@ body {
 /* Mobile & touch adjustments. */
 @media (max-width: 640px) {
   .win98-taskbar { min-height: 40px; }
-  .tray-social { display: none; }
   .win98-taskbar-button { padding: 0 8px; font-size: 11px; }
   .win98-menu-item { padding: 8px 12px; }
 }

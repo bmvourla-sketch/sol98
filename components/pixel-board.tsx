@@ -105,7 +105,7 @@ export function PixelBoard({ zoom }: { zoom: number }) {
   const selCount = sel ? rectIndices(sel.start, sel.end).length : 0;
 
   return (
-    <div className="flex h-full flex-col gap-2 p-3">
+    <div className="flex h-full flex-col gap-2 p-3 pt-12 sm:pt-3">
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <button
