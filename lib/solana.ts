@@ -6,7 +6,7 @@ import { PublicKey } from "@solana/web3.js";
 
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
-export const DEFAULT_MAINNET_RPC = "https://api.mainnet-beta.solana.com";
+export const DEFAULT_MAINNET_RPC = "https://rpc.ankr.com/solana";
 
 /**
  * Treasury wallet that receives every pixel purchase (real SOL).

@@ -34,3 +34,6 @@ next-env.d.ts
 
 # runtime board data (server-side pixels store)
 /data
+
+.vercel
+.env*
