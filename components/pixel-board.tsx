@@ -111,7 +111,7 @@ export function PixelBoard({ zoom }: { zoom: number }) {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <button
           type="button"
-          className="win98-button"
+          className="win98-button w-fit"
           disabled={!connected || firstFreeIndex < 0}
           onClick={() => setActiveIndices([firstFreeIndex])}
         >
