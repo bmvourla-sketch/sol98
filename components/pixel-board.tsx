@@ -106,8 +106,9 @@ export function PixelBoard({ zoom }: { zoom: number }) {
 
   return (
     <div className="flex h-full flex-col gap-2 p-3">
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-3">
+      {/* Toolbar: Buy Pixel stays on its own line on mobile (aligned with the
+          top-right zoom/wallet controls); the info text sits below it. */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <button
           type="button"
           className="win98-button"
@@ -116,14 +117,16 @@ export function PixelBoard({ zoom }: { zoom: number }) {
         >
           Buy Pixel
         </button>
-        <span className="text-xs text-white">
-          Next block: <b>{formatSol(nextPriceSol)} SOL</b>
-          <span className="text-white/60"> (10×10 · +10%/sale)</span>
-        </span>
-        {selCount > 1 && (
-          <span className="text-xs text-yellow-200">Selected: {selCount} blocks</span>
-        )}
-        {!connected && <span className="text-[11px] text-yellow-200">Connect wallet to buy</span>}
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-xs text-white">
+            Next block: <b>{formatSol(nextPriceSol)} SOL</b>
+            <span className="text-white/60"> (10×10 · +10%/sale)</span>
+          </span>
+          {selCount > 1 && (
+            <span className="text-xs text-yellow-200">Selected: {selCount} blocks</span>
+          )}
+          {!connected && <span className="text-[11px] text-yellow-200">Connect wallet to buy</span>}
+        </div>
       </div>
 
       {/* Launch countdown */}

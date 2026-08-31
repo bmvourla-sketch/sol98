@@ -64,7 +64,7 @@ export function SolanaConnectButton() {
         }}
       >
         <Wallet size={12} />
-        <span>{connecting ? "Connecting…" : disconnecting ? "…" : label}</span>
+        <span className="hidden sm:inline">{connecting ? "Connecting…" : disconnecting ? "…" : label}</span>
         {!connected && <ChevronDown size={11} />}
       </button>
 
