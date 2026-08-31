@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 
+import { BoardProvider } from "@/lib/board-store";
 import { DocumentProvider } from "@/lib/document-store";
 import { PixelProvider } from "@/lib/pixel-store";
 import { DocumentSale } from "./document-sale";
@@ -110,7 +111,8 @@ export default function Desktop() {
   return (
     <PixelProvider>
       <DocumentProvider>
-        <div className="app-root flex flex-col overflow-hidden">
+        <BoardProvider>
+          <div className="app-root flex flex-col overflow-hidden">
           {/* Green desktop = the pixel board */}
           <div className="relative flex-1 overflow-hidden">
             {/* Floating wallet + zoom (top-right, no bar) */}
@@ -157,6 +159,7 @@ export default function Desktop() {
             onWindowClick={(id) => (minimized[id] ? openWindow(id) : focusWindow(id))}
           />
         </div>
+        </BoardProvider>
       </DocumentProvider>
     </PixelProvider>
   );

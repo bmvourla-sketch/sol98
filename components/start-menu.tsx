@@ -1,11 +1,12 @@
 "use client";
 
-import { BookOpen, FileText, LayoutGrid, Map, Palette, Store, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import { BookOpen, FileText, FolderOpen, Map, Palette, Store, type LucideIcon } from "lucide-react";
 
 import type { WindowId } from "./desktop";
+import { StartAdsMenu } from "./start-ads";
 
 const ITEMS: { id: WindowId; label: string; Icon: LucideIcon }[] = [
-  { id: "board", label: "Board.exe", Icon: LayoutGrid },
   { id: "market", label: "Market.exe", Icon: Store },
   { id: "story", label: "Story.exe", Icon: BookOpen },
   { id: "whitepaper", label: "Whitepaper", Icon: FileText },
@@ -18,8 +19,10 @@ interface StartMenuProps {
   onClose: () => void;
 }
 
-/** Classic Win98 Start menu listing the five app windows. */
+/** Classic Win98 Start menu. "Start Ads" is a folder that opens a side flyout. */
 export function StartMenu({ onOpen, onClose }: StartMenuProps) {
+  const [adsOpen, setAdsOpen] = useState(false);
+
   return (
     <div className="win98-menu absolute bottom-full left-1 z-[100] w-56 py-1">
       <div className="win98-menu-item font-bold">
@@ -29,6 +32,26 @@ export function StartMenu({ onOpen, onClose }: StartMenuProps) {
         SOL-98
       </div>
       <div className="win98-menu-separator" />
+
+      {/* Start Ads — a folder that opens a side flyout (standard Start bar style) */}
+      <div className="relative" onMouseLeave={() => setAdsOpen(false)}>
+        <button
+          type="button"
+          className="win98-menu-item w-full text-left"
+          onClick={() => setAdsOpen((o) => !o)}
+          onMouseEnter={() => setAdsOpen(true)}
+        >
+          <FolderOpen size={16} color="#f0b000" />
+          <span className="flex-1">Start Ads</span>
+          <span className="text-[10px]">▸</span>
+        </button>
+        {adsOpen && (
+          <div className="win98-menu absolute left-full top-0 w-60 py-1">
+            <StartAdsMenu onClose={onClose} />
+          </div>
+        )}
+      </div>
+
       {ITEMS.map(({ id, label, Icon }) => (
         <button
           key={id}
