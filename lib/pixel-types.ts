@@ -65,12 +65,27 @@ export function isSafeLinkUrl(url: string): boolean {
   return /^https?:\/\/\S+$/i.test(url);
 }
 
-/** Ad image: http(s) URL, a same-origin-safe data:image/* URL, or empty. */
+// SOL-98 Phase 6 (RED-TEAM HARDENING — BULGU 7, see
+// docs/production-readiness/RED-TEAM-FINDINGS.md): `data:image/svg+xml` used
+// to be accepted here. Today's rendering (<img src=...> and a
+// `.style.backgroundImage` CSSOM assignment — see components/pixel-cell.tsx
+// / pixel-dialog.tsx) does not execute a script embedded in an SVG, but SVG
+// is the one image format THAT CAN carry an executable <script>/event-handler
+// if it is ever rendered a different way later (navigated to directly, put
+// behind an <object>/<iframe>, or fed into a server-side social-preview
+// renderer) — and ad content is exactly the kind of thing that ends up
+// copy-pasted into new contexts over a project's lifetime. Restricted to
+// raster formats only (png/jpeg/webp), matching the brief's explicit list.
+// gif is also dropped (data-URI GIFs only — an http(s)-hosted .gif is
+// unaffected, it matches the plain https? branch below unconditionally).
+export const SAFE_IMAGE_DATA_URI_TYPES = ["png", "jpe?g", "webp"] as const;
+
+/** Ad image: http(s) URL, a same-origin-safe data:image/{png,jpeg,webp} URL, or empty. */
 export function isSafeImageUrl(url: string): boolean {
   if (url === "") return true;
   if (url.length > MAX_IMAGE_LEN) return false;
   if (/^https?:\/\/\S+$/i.test(url)) return true;
-  return /^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,/i.test(url);
+  return new RegExp(`^data:image/(${SAFE_IMAGE_DATA_URI_TYPES.join("|")});base64,`, "i").test(url);
 }
 
 export function isSafeMessage(message: string): boolean {

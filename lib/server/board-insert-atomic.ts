@@ -10,6 +10,15 @@
 // the payment ledger + ownership history writes) happen in ONE Postgres
 // transaction (the insert_board_pixels_atomic RPC — see
 // supabase/migrations/0005_treasury_purchase_atomicity.up.sql).
+// SOL-98 Phase 6 (RED-TEAM HARDENING — BULGU 1, see
+// docs/production-readiness/RED-TEAM-FINDINGS.md and
+// supabase/migrations/0006_hardening_price_lock_documents_intent_expiry.up.sql):
+// same treatment as pixel-insert-atomic.ts — `paidLamports` (the REAL amount
+// verifySolTransfer found on-chain) is forwarded to insert_board_pixels_atomic,
+// which re-derives the true current board.exe price under a
+// pg_advisory_xact_lock and rejects (ok:false, reason:"underpaid") if the
+// payment falls short, closing the same cross-instance price race for
+// buy-board.
 import "server-only";
 
 import type { BoardFile, BoardPixel } from "@/lib/board-types";
@@ -25,9 +34,14 @@ export interface InsertBoardParams {
   wallet: string;
   action: string; // "buy-board"
   amountSol: number;
+  /** The REAL, already on-chain-verified lamport amount — see
+   * pixel-insert-atomic.ts's identical field for the full rationale. */
+  paidLamports: number;
 }
 
-export type InsertBoardResult = { ok: true; file: BoardFile } | { ok: false; reason: string };
+export type InsertBoardResult =
+  | { ok: true; file: BoardFile }
+  | { ok: false; reason: string };
 
 interface RpcRow {
   ok: boolean;
@@ -47,6 +61,7 @@ async function insertViaSupabaseRpc(params: InsertBoardParams): Promise<InsertBo
       p_action: params.action,
       p_amount_sol: params.amountSol,
       p_mint: null, // buy-board is always SOL-priced in this codebase
+      p_paid_lamports: params.paidLamports,
     }),
   });
   if (!res.ok) {

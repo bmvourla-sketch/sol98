@@ -230,6 +230,12 @@ async function handleBuyBoard(body: Record<string, unknown>, actor: string, ip: 
       return fail(402, `payment not verified: ${verified.error}`);
     }
     logAudit("payment_verified", { action: "buy-board", wallet: actor });
+    // SOL-98 Phase 6 (BULGU 1, see docs/production-readiness/
+    // RED-TEAM-FINDINGS.md) — same fix as buy/buy-area: forward the REAL
+    // verified lamport amount so insertBoardAtomic's RPC can re-derive the
+    // true board.exe price under a cross-instance advisory lock and reject
+    // an underpayment caused by a racy soldCount read.
+    const paidLamports = verified.lamportsFound ?? minLamports;
 
     const firstUse = await claimSignature(signature);
     if (!firstUse) {
@@ -257,7 +263,7 @@ async function handleBuyBoard(body: Record<string, unknown>, actor: string, ip: 
     // more separate best-effort ledger writes.
     let created: Awaited<ReturnType<typeof insertBoardAtomic>>;
     try {
-      created = await insertBoardAtomic({ file, subBlocks, signature, wallet: actor, action: "buy-board", amountSol: priceSol });
+      created = await insertBoardAtomic({ file, subBlocks, signature, wallet: actor, action: "buy-board", amountSol: priceSol, paidLamports });
     } catch (error) {
       await releaseSignatureSafely(signature, { action: "buy-board", wallet: actor });
       logAudit("db_failure", {
@@ -270,6 +276,13 @@ async function handleBuyBoard(body: Record<string, unknown>, actor: string, ip: 
     }
     if (!created.ok) {
       await releaseSignatureSafely(signature, { action: "buy-board", wallet: actor });
+      if (created.reason === "underpaid") {
+        logAudit("ownership_conflict", { action: "buy-board", wallet: actor, reason: "underpaid" });
+        return fail(
+          409,
+          "the price moved before your purchase landed (someone bought ahead of you in the queue) — your payment proof is still valid, please check the current price and retry"
+        );
+      }
       logAudit("ownership_conflict", { action: "buy-board", wallet: actor });
       return fail(409, "board creation conflict — please retry");
     }

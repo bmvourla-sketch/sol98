@@ -24,6 +24,16 @@
 // rolls back the WHOLE transaction, pixel rows included. See
 // docs/production-readiness/PHASE-4-FRONTEND-TOKEN-PREP.md for the
 // RED TEAM test that proves this against real staging Postgres.
+//
+// SOL-98 Phase 6 (RED-TEAM HARDENING — BULGU 1, see
+// docs/production-readiness/RED-TEAM-FINDINGS.md and
+// supabase/migrations/0006_hardening_price_lock_documents_intent_expiry.up.sql):
+// `paidLamports` (the REAL amount verifySolTransfer found on-chain — see
+// lib/server/verify-tx.ts's `lamportsFound`) is now forwarded to the RPC,
+// which re-derives the TRUE current price under a pg_advisory_xact_lock and
+// rejects (ok:false, reason:"underpaid") if the caller's payment falls short
+// of it — closing the race where two concurrent buy/buy-area requests could
+// both read the same stale soldCount and both underpay.
 import "server-only";
 
 import type { PixelData } from "@/lib/pixel-types";
@@ -38,9 +48,15 @@ export interface InsertPixelsParams {
   wallet: string;
   action: string; // "buy" | "buy-area"
   amountSol: number;
+  /** The REAL, already on-chain-verified lamport amount (verifySolTransfer's
+   * `lamportsFound`) — re-checked by the RPC against a freshly, atomically
+   * computed price. See this file's Phase 6 header comment. */
+  paidLamports: number;
 }
 
-export type InsertPixelsResult = { ok: true } | { ok: false; taken: number[] };
+export type InsertPixelsResult =
+  | { ok: true }
+  | { ok: false; reason: "conflict" | "underpaid"; taken: number[] };
 
 interface RpcRow {
   ok: boolean;
@@ -59,6 +75,7 @@ async function insertViaSupabaseRpc(params: InsertPixelsParams): Promise<InsertP
       p_action: params.action,
       p_amount_sol: params.amountSol,
       p_mint: null, // buy / buy-area are always SOL-priced in this codebase
+      p_paid_lamports: params.paidLamports,
     }),
   });
   if (!res.ok) {
@@ -72,18 +89,26 @@ async function insertViaSupabaseRpc(params: InsertPixelsParams): Promise<InsertP
   }
   const rows = (await res.json()) as RpcRow[];
   const row = rows[0];
-  if (!row || !row.ok) return { ok: false, taken: row?.taken ?? [] };
+  if (!row || !row.ok) {
+    const reason = row?.reason === "underpaid" ? "underpaid" : "conflict";
+    return { ok: false, reason, taken: row?.taken ?? [] };
+  }
   return { ok: true };
 }
 
 /**
  * File-store (dev only) fallback. NOT a single transaction — the ledger
  * writes here are best-effort, same documented limitation as
- * pixel-mutations-atomic.ts's updateViaFileStore.
+ * pixel-mutations-atomic.ts's updateViaFileStore. `paidLamports` is NOT
+ * re-verified here: the price race this guards against is a cross-instance/
+ * cross-serverless-process phenomenon, which the single-process file store
+ * (guarded by the same in-process mutex as everything else on this backend)
+ * cannot exhibit — documented dev-only limitation, same class as every other
+ * file-store caveat in this codebase.
  */
 async function insertViaFileStore(params: InsertPixelsParams): Promise<InsertPixelsResult> {
   const created = await createPixels(params.pixels);
-  if (!created.ok) return created;
+  if (!created.ok) return { ok: false, reason: "conflict", taken: created.taken };
   await recordPaymentTransaction({
     signature: params.signature,
     wallet: params.wallet,

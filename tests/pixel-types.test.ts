@@ -39,6 +39,27 @@ describe("isSafeImageUrl — ad image / Banner.exe export", () => {
     expect(isSafeImageUrl("javascript:alert(1)")).toBe(false);
     expect(isSafeImageUrl("data:text/html;base64,PHNjcmlwdD4=")).toBe(false);
   });
+
+  // SOL-98 Phase 6 (RED-TEAM HARDENING — BULGU 7): data:image/svg+xml can
+  // carry an executable <script>/event-handler if ever rendered a different
+  // way than today's <img>/CSSOM usage — see the isSafeImageUrl doc comment.
+  it("rejects data:image/svg+xml (BULGU 7 — potential script vector)", () => {
+    expect(isSafeImageUrl("data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=")).toBe(false);
+  });
+
+  it("rejects data:image/gif — data-URI GIFs are no longer accepted (raster png/jpeg/webp only)", () => {
+    expect(isSafeImageUrl("data:image/gif;base64,R0lGODlh")).toBe(false);
+  });
+
+  it("still allows an http(s)-hosted .gif — only the inline data: form is restricted", () => {
+    expect(isSafeImageUrl("https://example.com/banner.gif")).toBe(true);
+  });
+
+  it("allows jpeg and webp data URIs", () => {
+    expect(isSafeImageUrl("data:image/jpeg;base64,/9j/4AAQ")).toBe(true);
+    expect(isSafeImageUrl("data:image/jpg;base64,/9j/4AAQ")).toBe(true);
+    expect(isSafeImageUrl("data:image/webp;base64,UklGR")).toBe(true);
+  });
 });
 
 describe("sanitizeAdContent", () => {

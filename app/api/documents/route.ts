@@ -1,14 +1,27 @@
 import { PublicKey } from "@solana/web3.js";
 import { NextResponse } from "next/server";
 
-import { createDocument, readAllDocuments } from "@/lib/server/document-db";
-import { claimSignature, releaseSignature } from "@/lib/server/used-signatures";
+import { readAllDocuments } from "@/lib/server/document-db";
+import { claimSignature, releaseSignatureSafely } from "@/lib/server/used-signatures";
 import { solRequiredLamportsWithTolerance, verifySolTransfer } from "@/lib/server/verify-tx";
 import { isRateLimited, requestIp } from "@/lib/server/rate-limit";
-import { recordPaymentTransaction } from "@/lib/server/payment-ledger";
+import { insertDocumentAtomic } from "@/lib/server/document-insert-atomic";
 import { logAudit } from "@/lib/server/audit-log";
 import { TREASURY_ADDRESS } from "@/lib/solana";
 import { DOCUMENT_PRICE_SOL, isDocumentValidationError, sanitizeDocumentInput, type DocumentData } from "@/lib/document-types";
+
+// SOL-98 Phase 6 (RED-TEAM HARDENING — BULGU 2, see
+// docs/production-readiness/RED-TEAM-FINDINGS.md): this route used to call
+// createDocument() then a SEPARATE best-effort recordPaymentTransaction() —
+// the P2-F4-class ledger-completeness gap Phase 3/4 already closed for
+// pixel/board purchases, just never applied here. It now goes through
+// insertDocumentAtomic (one Postgres transaction covering both the document
+// row and the payment_transactions ledger row — see
+// supabase/migrations/0006_hardening_price_lock_documents_intent_expiry.up.sql),
+// with the same Phase 2.1 (P2-F2) release-on-throw discipline every other
+// treasury purchase handler already follows: a thrown error releases the
+// signature so a real DB/infra failure doesn't permanently burn a payment
+// proof that already reached the treasury.
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -85,15 +98,25 @@ export async function POST(request: Request) {
       owner: actor,
       purchasedAt: Date.now(),
     };
+    let created: Awaited<ReturnType<typeof insertDocumentAtomic>>;
     try {
-      const created = await createDocument(doc);
-      await recordPaymentTransaction({ signature, wallet: actor, action: "buy-document", amountSol: DOCUMENT_PRICE_SOL });
-      return NextResponse.json({ ok: true, document: created });
-    } catch (writeError) {
-      await releaseSignature(signature);
-      logAudit("db_failure", { where: "createDocument", error: writeError instanceof Error ? writeError.message : String(writeError) });
-      throw writeError;
+      created = await insertDocumentAtomic({ doc, signature, wallet: actor, action: "buy-document", amountSol: DOCUMENT_PRICE_SOL });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "buy-document", wallet: actor });
+      logAudit("db_failure", {
+        where: "insertDocumentAtomic",
+        action: "buy-document",
+        wallet: actor,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
+    if (!created.ok) {
+      await releaseSignatureSafely(signature, { action: "buy-document", wallet: actor });
+      logAudit("ownership_conflict", { action: "buy-document", wallet: actor });
+      return fail(409, "that document id was just taken — please retry, your payment proof is still valid");
+    }
+    return NextResponse.json({ ok: true, document: created.document });
   } catch (error) {
     return fail(500, error instanceof Error ? error.message : "purchase failed");
   }

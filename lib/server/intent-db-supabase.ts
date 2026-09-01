@@ -97,3 +97,32 @@ export async function getIntent(id: string): Promise<PurchaseIntent | undefined>
   const rows = (await res.json()) as IntentRow[];
   return rows[0] ? fromRow(rows[0]) : undefined;
 }
+
+// SOL-98 Phase 6 (RED-TEAM HARDENING — BULGU 3, see
+// docs/production-readiness/RED-TEAM-FINDINGS.md): before this phase,
+// purchase_intents.status could declare 'expired'/'cancelled' in its check
+// constraint but nothing ever wrote them — an abandoned intent stayed
+// 'pending' forever, growing the table without bound. This calls the
+// expire_stale_purchase_intents() RPC (supabase/migrations/
+// 0006_hardening_price_lock_documents_intent_expiry.up.sql), which flips
+// every row past its expires_at back to 'pending' → 'expired' in one
+// statement. Deliberately best-effort/fire-and-forget — see
+// intent-db.ts's createIntent, which calls this WITHOUT awaiting it so a
+// transient sweep failure never adds latency to (or fails) creating the
+// intent the caller actually asked for. Equally callable from a future
+// pg_cron schedule with zero further schema change.
+export async function expireStaleIntents(): Promise<void> {
+  try {
+    const res = await fetch(`${supabaseBaseUrl()}/rest/v1/rpc/expire_stale_purchase_intents`, {
+      method: "POST",
+      headers: supabaseHeaders({ "Content-Type": "application/json" }),
+      body: "{}",
+    });
+    if (!res.ok) {
+      throw new Error(`expire_stale_purchase_intents rpc failed: ${res.status}`);
+    }
+  } catch {
+    // Best-effort — a failed sweep is not this request's problem. The next
+    // opportunistic call (or a future scheduled job) will catch up.
+  }
+}

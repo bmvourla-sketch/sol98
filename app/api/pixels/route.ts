@@ -232,6 +232,11 @@ async function handleBuy(body: Record<string, unknown>, actor: string, ip: strin
       return fail(402, `payment not verified: ${verified.error}`);
     }
     logAudit("payment_verified", { action: "buy", wallet: actor, index });
+    // SOL-98 Phase 6 (BULGU 1): the REAL verified lamport amount, not this
+    // request's own possibly-stale price guess — insertPixelsAtomic's RPC
+    // re-derives the true price under a cross-instance lock and rejects if
+    // this falls short. See lib/server/verify-tx.ts's lamportsFound doc.
+    const paidLamports = verified.lamportsFound ?? minLamports;
 
     const firstUse = await claimSignature(signature);
     if (!firstUse) {
@@ -264,7 +269,7 @@ async function handleBuy(body: Record<string, unknown>, actor: string, ip: strin
     // followed by two separate best-effort ledger writes.
     let created: Awaited<ReturnType<typeof insertPixelsAtomic>>;
     try {
-      created = await insertPixelsAtomic({ pixels: [pixel], signature, wallet: actor, action: "buy", amountSol: priceSol });
+      created = await insertPixelsAtomic({ pixels: [pixel], signature, wallet: actor, action: "buy", amountSol: priceSol, paidLamports });
     } catch (error) {
       await releaseSignatureSafely(signature, { action: "buy", wallet: actor, index });
       logAudit("db_failure", {
@@ -278,6 +283,17 @@ async function handleBuy(body: Record<string, unknown>, actor: string, ip: strin
     }
     if (!created.ok) {
       await releaseSignatureSafely(signature, { action: "buy", wallet: actor, index });
+      if (created.reason === "underpaid") {
+        // SOL-98 Phase 6 (BULGU 1): the race this closes — a concurrent
+        // purchase committed first, so the REAL price at this request's
+        // actual turn (recomputed fresh, under lock, inside the RPC) was
+        // higher than what this signature's payment covers.
+        logAudit("ownership_conflict", { action: "buy", wallet: actor, index, reason: "underpaid" });
+        return fail(
+          409,
+          "the price moved before your purchase landed (someone bought ahead of you in the queue) — your payment proof is still valid, please check the current price and retry"
+        );
+      }
       logAudit("ownership_conflict", { action: "buy", wallet: actor, index });
       return fail(409, "that spot was just sold — pick another, your payment proof is still valid to retry");
     }
@@ -315,6 +331,8 @@ async function handleBuyArea(body: Record<string, unknown>, actor: string, ip: s
       return fail(402, `payment not verified: ${verified.error}`);
     }
     logAudit("payment_verified", { action: "buy-area", wallet: actor, count: typedIndices.length });
+    // SOL-98 Phase 6 (BULGU 1) — see handleBuy's identical comment.
+    const paidLamports = verified.lamportsFound ?? minLamports;
 
     const firstUse = await claimSignature(signature);
     if (!firstUse) {
@@ -347,7 +365,7 @@ async function handleBuyArea(body: Record<string, unknown>, actor: string, ip: s
     // atomic INSERT+ledger RPC as handleBuy above.
     let created: Awaited<ReturnType<typeof insertPixelsAtomic>>;
     try {
-      created = await insertPixelsAtomic({ pixels, signature, wallet: actor, action: "buy-area", amountSol: priceSol });
+      created = await insertPixelsAtomic({ pixels, signature, wallet: actor, action: "buy-area", amountSol: priceSol, paidLamports });
     } catch (error) {
       await releaseSignatureSafely(signature, { action: "buy-area", wallet: actor, count: typedIndices.length });
       logAudit("db_failure", {
@@ -361,6 +379,13 @@ async function handleBuyArea(body: Record<string, unknown>, actor: string, ip: s
     }
     if (!created.ok) {
       await releaseSignatureSafely(signature, { action: "buy-area", wallet: actor, taken: created.taken.length });
+      if (created.reason === "underpaid") {
+        logAudit("ownership_conflict", { action: "buy-area", wallet: actor, reason: "underpaid" });
+        return fail(
+          409,
+          "the price moved before your purchase landed (someone bought ahead of you in the queue) — your payment proof is still valid, please check the current price and retry"
+        );
+      }
       logAudit("ownership_conflict", { action: "buy-area", wallet: actor, taken: created.taken.length });
       return fail(
         409,

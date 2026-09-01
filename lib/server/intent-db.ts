@@ -113,6 +113,12 @@ export async function createIntent(input: CreateIntentInput): Promise<PurchaseIn
   };
 
   if (isSupabaseConfigured()) {
+    // SOL-98 Phase 6 (BULGU 3) — opportunistic, non-blocking sweep: piggy-
+    // back on every intent creation to also flip any now-stale 'pending'
+    // rows to 'expired'. Fire-and-forget (not awaited) so a slow/failed
+    // sweep never adds latency to, or fails, THIS creation — see
+    // intent-db-supabase.ts's expireStaleIntents doc comment.
+    void supabaseStore.expireStaleIntents();
     return supabaseStore.createIntent(intent);
   }
   return withLock(async () => {

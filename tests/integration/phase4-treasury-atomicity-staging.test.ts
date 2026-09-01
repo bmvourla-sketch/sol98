@@ -206,6 +206,12 @@ d("Phase 4 — treasury purchase atomicity, against real staging DB", () => {
         p_action: "buy",
         p_amount_sol: 0.2,
         p_mint: null,
+        // SOL-98 Phase 6 (BULGU 1) — insert_pixels_atomic now re-checks the
+        // price under an advisory lock; this test is about the LEDGER
+        // rollback, not pricing, so pass a comfortably sufficient amount so
+        // the price check always passes and the test reaches the exception
+        // it's actually probing.
+        p_paid_lamports: 999_999_999_999,
       }),
     });
 
@@ -274,6 +280,9 @@ d("Phase 4 — treasury purchase atomicity, against real staging DB", () => {
         p_action: "buy-board",
         p_amount_sol: 2,
         p_mint: null,
+        // SOL-98 Phase 6 (BULGU 1) — see the insert_pixels_atomic RED TEAM
+        // test's identical comment above.
+        p_paid_lamports: 999_999_999_999,
       }),
     });
     expect(rpcRes.ok).toBe(false);

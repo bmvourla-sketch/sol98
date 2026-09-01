@@ -14,7 +14,19 @@ import { solToLamports } from "@/lib/solana";
 const MAX_TX_AGE_MS = 15 * 60 * 1000; // 15 minutes — bounds (doesn't replace) replay risk
 const MAX_TX_FUTURE_SKEW_MS = 2 * 60 * 1000;
 
-export type VerifyResult = { ok: true } | { ok: false; error: string };
+// SOL-98 Phase 6 (RED-TEAM HARDENING — BULGU 1): `lamportsFound` carries the
+// ACTUAL lamport amount the matching on-chain instruction transferred, not
+// just "at least minLamports". The treasury purchase handlers (buy/buy-area
+// in app/api/pixels/route.ts, buy-board in app/api/boards/route.ts) forward
+// this real, already-verified number to insert_pixels_atomic /
+// insert_board_pixels_atomic (supabase/migrations/
+// 0006_hardening_price_lock_documents_intent_expiry.up.sql), which re-checks
+// it against a FRESH, pg_advisory_xact_lock-serialized price computed at
+// insert time — closing the race where a stale/racy client-side price
+// computation could otherwise let a concurrent request underpay. Only
+// verifySolTransfer populates it (the only verifier used by a racy bonding-
+// curve price); the other verifiers are unaffected.
+export type VerifyResult = { ok: true; lamportsFound?: number } | { ok: false; error: string };
 
 function isParsedInstruction(
   ix: ParsedInstruction | PartiallyDecodedInstruction
@@ -96,7 +108,7 @@ export async function verifySolTransfer({
     const destination = normalizePubkey(info.destination);
     const lamports = Number(info.lamports ?? 0);
     if (source === from && destination === to && lamports >= minLamports) {
-      return { ok: true };
+      return { ok: true, lamportsFound: lamports };
     }
   }
   return {
