@@ -6,7 +6,17 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { usePixels } from "@/lib/pixel-store";
 import { formatSol } from "@/lib/pricing";
 import { isTokenLive, shortenAddress } from "@/lib/solana";
+import { friendlyIntentError } from "@/lib/purchase-intent";
+import { IntentCountdown } from "./intent-countdown";
 import { PixelDialog } from "./pixel-dialog";
+
+/** SOL-98 Phase 4 (GÖREV 1) — busy-button label reflecting the current step
+ * of the intent → sign → redeem flow. */
+function buyBusyLabel(txPhase: "creating_intent" | "awaiting_signature" | "processing" | null): string {
+  if (txPhase === "creating_intent") return "Locking price…";
+  if (txPhase === "awaiting_signature") return "Confirm in wallet…";
+  return "Paying…";
+}
 
 /**
  * Market.exe — buy, rent, or sell ad spots. "Buy"/"Rent" here send a REAL
@@ -37,7 +47,12 @@ export function Market() {
     try {
       await ctx.buyListing(index);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Purchase failed");
+      // SOL-98 Phase 4 (GÖREV 1) — buyListing now reserves a purchase
+      // intent before paying (see lib/pixel-store.tsx); a 410/403/409 here
+      // means the offer expired, belonged to a different wallet, or the
+      // listing changed before payment landed. friendlyIntentError maps
+      // those to a message the user can act on instead of a raw HTTP error.
+      setError(friendlyIntentError(err));
     } finally {
       setBusyIndex(null);
     }
@@ -50,7 +65,7 @@ export function Market() {
     try {
       await ctx.rentPixel(index, 30);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Rent failed");
+      setError(friendlyIntentError(err));
     } finally {
       setBusyIndex(null);
     }
@@ -81,6 +96,11 @@ export function Market() {
 
       {!connected && <div className="text-[#800000]">Connect wallet to use the market.</div>}
       {error && <div className="bevel-in px-2 py-1 text-[#800000]">{error}</div>}
+      {ctx.activeIntent && busyIndex !== null && (
+        <div className="bevel-in px-2 py-1">
+          <IntentCountdown expiresAt={ctx.activeIntent.expiresAt} />
+        </div>
+      )}
 
       {/* My spots */}
       <div className="bevel-out px-2 py-1 font-bold">My Spots ({mySpots.length})</div>
@@ -133,7 +153,7 @@ export function Market() {
               onClick={() => buyListing(p.index)}
               disabled={busyIndex === p.index}
             >
-              {busyIndex === p.index ? "Paying…" : "Buy"}
+              {busyIndex === p.index ? buyBusyLabel(ctx.txPhase) : "Buy"}
             </button>
           ) : (
             <button type="button" className="win98-button !px-2 !py-0 ml-auto" disabled title="Available after $PIXEL98 launch">
@@ -162,7 +182,7 @@ export function Market() {
               onClick={() => rent(p.index)}
               disabled={busyIndex === p.index}
             >
-              {busyIndex === p.index ? "Paying…" : "Rent 30d"}
+              {busyIndex === p.index ? buyBusyLabel(ctx.txPhase) : "Rent 30d"}
             </button>
           ) : (
             <button type="button" className="win98-button !px-2 !py-0 ml-auto" disabled title="Available after $PIXEL98 launch">

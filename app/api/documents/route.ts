@@ -5,6 +5,8 @@ import { createDocument, readAllDocuments } from "@/lib/server/document-db";
 import { claimSignature, releaseSignature } from "@/lib/server/used-signatures";
 import { solRequiredLamportsWithTolerance, verifySolTransfer } from "@/lib/server/verify-tx";
 import { isRateLimited, requestIp } from "@/lib/server/rate-limit";
+import { recordPaymentTransaction } from "@/lib/server/payment-ledger";
+import { logAudit } from "@/lib/server/audit-log";
 import { TREASURY_ADDRESS } from "@/lib/solana";
 import { DOCUMENT_PRICE_SOL, isDocumentValidationError, sanitizeDocumentInput, type DocumentData } from "@/lib/document-types";
 
@@ -64,10 +66,17 @@ export async function POST(request: Request) {
       toOwner: TREASURY_ADDRESS,
       minLamports,
     });
-    if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    if (!verified.ok) {
+      logAudit("payment_verification_failed", { action: "buy-document", wallet: actor, reason: verified.error });
+      return fail(402, `payment not verified: ${verified.error}`);
+    }
+    logAudit("payment_verified", { action: "buy-document", wallet: actor });
 
     const firstUse = await claimSignature(signature);
-    if (!firstUse) return fail(409, "this transaction signature was already used");
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "buy-document", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
 
     const doc: DocumentData = {
       id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
@@ -78,9 +87,11 @@ export async function POST(request: Request) {
     };
     try {
       const created = await createDocument(doc);
+      await recordPaymentTransaction({ signature, wallet: actor, action: "buy-document", amountSol: DOCUMENT_PRICE_SOL });
       return NextResponse.json({ ok: true, document: created });
     } catch (writeError) {
       await releaseSignature(signature);
+      logAudit("db_failure", { where: "createDocument", error: writeError instanceof Error ? writeError.message : String(writeError) });
       throw writeError;
     }
   } catch (error) {

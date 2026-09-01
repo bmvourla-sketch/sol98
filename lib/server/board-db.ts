@@ -1,8 +1,12 @@
 // Server-side store for "Start Ads" board.exe files + their sub-blocks.
-// Single file-backed store (data/boards.json) — durable for single-instance
-// deploys, guarded by an in-process mutex. Mirrors pixel-db.ts's conditional
-// update primitives so the secondary market (buy-listing / rent) and hijack
-// re-check the LIVE row before writing (no clobbering under concurrency).
+// Two interchangeable backends, same shape as pixel-db.ts:
+//   1. Supabase (PostgREST) — auto-selected when SUPABASE_URL +
+//      SUPABASE_SERVICE_ROLE_KEY are set. Durable across serverless
+//      instances; added in Phase 1 (previously this store was file-only,
+//      a real-money gap for Start Ads). See board-db-supabase.ts.
+//   2. File store (`data/boards.json`) — atomic tmp+rename write, guarded by
+//      an in-process mutex. Dev-only in production (see requireDurableStore
+//      in supabase-env.ts) — fine for local dev / single-machine deploys.
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
@@ -14,7 +18,9 @@ import {
   type BoardFile,
   type BoardPixel,
 } from "@/lib/board-types";
+import { isSupabaseConfigured, requireDurableStore } from "./supabase-env";
 import { createMutex } from "./mutex";
+import * as supabaseStore from "./board-db-supabase";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "boards.json");
@@ -55,11 +61,13 @@ export type MutateResult = { ok: true; pixel: BoardPixel } | { ok: false; reason
 
 /** Whole Start Ads state — every client GETs this same global snapshot. */
 export async function readAllBoards(): Promise<BoardsState> {
+  if (isSupabaseConfigured()) return supabaseStore.readAllBoards();
   const state = await load();
   return { files: [...state.files], pixels: { ...state.pixels } };
 }
 
 export async function countBoardFiles(): Promise<number> {
+  if (isSupabaseConfigured()) return supabaseStore.countBoardFiles();
   const state = await load();
   return state.files.length;
 }
@@ -84,6 +92,8 @@ export function makeSubBlocks(boardId: string, owner: string, purchasedAt: numbe
  * Creates a board file and its 100 sub-blocks atomically (no partial write).
  */
 export async function createBoard(file: BoardFile, subBlocks: BoardPixel[]): Promise<CreateResult> {
+  requireDurableStore();
+  if (isSupabaseConfigured()) return supabaseStore.createBoard(file, subBlocks);
   return withLock(async () => {
     const state = await load();
     if (state.files.some((f) => f.id === file.id)) return { ok: false, reason: "already exists" };
@@ -97,6 +107,7 @@ export async function createBoard(file: BoardFile, subBlocks: BoardPixel[]): Pro
 }
 
 export async function getBoardPixel(boardId: string, index: number): Promise<BoardPixel | undefined> {
+  if (isSupabaseConfigured()) return supabaseStore.getBoardPixel(boardId, index);
   const state = await load();
   return state.pixels[boardPixelKey(boardId, index)];
 }
@@ -112,6 +123,8 @@ export async function updateBoardPixel(
   expectedOwner: string,
   mutate: (current: BoardPixel) => BoardPixel
 ): Promise<MutateResult> {
+  requireDurableStore();
+  if (isSupabaseConfigured()) return supabaseStore.updateBoardPixel(boardId, index, expectedOwner, mutate);
   return withLock(async () => {
     const state = await load();
     const key = boardPixelKey(boardId, index);
@@ -135,6 +148,8 @@ export async function renameBoardFile(
   expectedOwner: string,
   newName: string
 ): Promise<CreateResult> {
+  requireDurableStore();
+  if (isSupabaseConfigured()) return supabaseStore.renameBoardFile(boardId, expectedOwner, newName);
   return withLock(async () => {
     const state = await load();
     const file = state.files.find((f) => f.id === boardId);
@@ -151,6 +166,8 @@ export async function hijackBoardPixel(
   index: number,
   mutate: (current: BoardPixel) => BoardPixel
 ): Promise<MutateResult> {
+  requireDurableStore();
+  if (isSupabaseConfigured()) return supabaseStore.hijackBoardPixel(boardId, index, mutate);
   return withLock(async () => {
     const state = await load();
     const key = boardPixelKey(boardId, index);

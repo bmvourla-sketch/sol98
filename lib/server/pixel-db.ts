@@ -15,7 +15,7 @@ import { promises as fs } from "fs";
 import path from "path";
 
 import type { PixelData } from "@/lib/pixel-types";
-import { isSupabaseConfigured } from "./supabase-env";
+import { isSupabaseConfigured, requireDurableStore } from "./supabase-env";
 import { createMutex } from "./mutex";
 import * as supabaseStore from "./pixel-db-supabase";
 
@@ -83,6 +83,7 @@ export async function soldCount(): Promise<number> {
  * purchase can never silently overwrite someone else's spot.
  */
 export async function createPixels(records: PixelData[]): Promise<CreateResult> {
+  requireDurableStore();
   if (isSupabaseConfigured()) return supabaseStore.createPixels(records);
   return withLock(async () => {
     const store = await load();
@@ -107,6 +108,7 @@ export async function updateOwnedPixel(
   expectedOwner: string,
   mutate: (current: PixelData) => PixelData
 ): Promise<MutateResult> {
+  requireDurableStore();
   if (isSupabaseConfigured()) return supabaseStore.updateOwnedPixel(index, expectedOwner, mutate);
   return withLock(async () => {
     const store = await load();
@@ -126,6 +128,7 @@ export async function updateGroupOwnedPixels(
   expectedOwner: string,
   mutate: (current: PixelData) => PixelData
 ): Promise<MutateGroupResult> {
+  requireDurableStore();
   if (isSupabaseConfigured()) return supabaseStore.updateGroupOwnedPixels(groupId, expectedOwner, mutate);
   return withLock(async () => {
     const store = await load();
@@ -150,6 +153,7 @@ export async function hijackPixel(
   index: number,
   mutate: (current: PixelData) => PixelData
 ): Promise<MutateResult> {
+  requireDurableStore();
   if (isSupabaseConfigured()) return supabaseStore.hijackPixel(index, mutate);
   return withLock(async () => {
     const store = await load();

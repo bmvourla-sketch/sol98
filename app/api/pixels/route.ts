@@ -2,7 +2,6 @@ import { PublicKey } from "@solana/web3.js";
 import { NextResponse } from "next/server";
 
 import {
-  createPixels,
   getPixel,
   hijackPixel,
   readAllPixels,
@@ -10,12 +9,17 @@ import {
   updateGroupOwnedPixels,
   updateOwnedPixel,
 } from "@/lib/server/pixel-db";
-import { claimSignature, releaseSignature } from "@/lib/server/used-signatures";
+import { claimSignature, releaseSignatureSafely } from "@/lib/server/used-signatures";
 import { verifyAuthProof } from "@/lib/server/verify-message";
 import { solRequiredLamportsWithTolerance, tokenAmountToRaw, verifyBurn, verifySolTransfer, verifyTokenTransfer } from "@/lib/server/verify-tx";
 import { getBurnedFraction } from "@/lib/server/token-stats";
 import { isRateLimited, requestIp } from "@/lib/server/rate-limit";
 import { createMutex } from "@/lib/server/mutex";
+import { recordOwnershipHistory } from "@/lib/server/ownership-history";
+import { logAudit } from "@/lib/server/audit-log";
+import { getIntent, type IntentActionType, type PurchaseIntent } from "@/lib/server/intent-db";
+import { updatePixelOwnerAtomic } from "@/lib/server/pixel-mutations-atomic";
+import { insertPixelsAtomic } from "@/lib/server/pixel-insert-atomic";
 import { areaPrice, BOARD_SIZE, nextSpotPrice, TOTAL_SPOTS } from "@/lib/pricing";
 import { HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
 import { PIXEL98_MINT, TREASURY_ADDRESS } from "@/lib/solana";
@@ -131,7 +135,9 @@ export async function POST(request: Request) {
         return fail(400, `unknown action "${action}"`);
     }
   } catch (error) {
-    return fail(500, error instanceof Error ? error.message : "request failed");
+    const message = error instanceof Error ? error.message : "request failed";
+    logAudit("db_failure", { where: "pixels POST", action, error: message });
+    return fail(500, message);
   }
 }
 
@@ -141,6 +147,58 @@ function readAd(body: Record<string, unknown>) {
 
 function requireTreasury(): string | null {
   return TREASURY_ADDRESS || null;
+}
+
+// ---------------------------------------------------------------------------
+// SOL-98 Phase 3 (MARKET SECURITY) — fixes finding P2-F1 (transaction
+// substitution, see docs/production-readiness/PHASE-2-PAYMENT-SECURITY.md
+// and PHASE-3-MARKET-SECURITY.md). buy-listing / rent / hijack(live) now
+// require a server-issued purchase_intent (created via
+// POST /api/purchase-intents) instead of trusting a client-submitted
+// index. This resolves + validates that intent; every caller below then
+// uses `intent.pixelIndex` / `intent.sellerWallet` / `intent.priceSol` /
+// `intent.pricePixel98` as the SOLE source of truth for what's being paid
+// for — the request body's own `index` field (if present) is never read by
+// any of these three handlers again.
+// ---------------------------------------------------------------------------
+async function resolveIntent(
+  body: Record<string, unknown>,
+  actor: string,
+  expectedActionType: IntentActionType
+): Promise<{ ok: true; intent: PurchaseIntent } | { ok: false; response: Response }> {
+  const intentId = body.intentId;
+  if (typeof intentId !== "string" || !intentId) {
+    return { ok: false, response: fail(400, "missing intentId — create one via POST /api/purchase-intents first") };
+  }
+  const intent = await getIntent(intentId);
+  if (!intent) return { ok: false, response: fail(404, "purchase intent not found") };
+  if (intent.actionType !== expectedActionType) {
+    return { ok: false, response: fail(400, "this intent was not created for this action") };
+  }
+  if (intent.boardId !== null) {
+    return { ok: false, response: fail(400, "this intent is for a Start Ads board — redeem it via POST /api/boards") };
+  }
+  // Wallet-bound: closes red-team requirement "payment attempted with
+  // another wallet's intent_id must be REJECTED".
+  if (intent.buyerWallet !== actor) {
+    logAudit("authorization_failure", { action: expectedActionType, wallet: actor, reason: "intent belongs to a different wallet", intentId });
+    return { ok: false, response: fail(403, "this purchase intent belongs to a different wallet") };
+  }
+  if (intent.status !== "pending") {
+    return { ok: false, response: fail(409, `this intent is ${intent.status}, not pending`) };
+  }
+  // Time-bound: closes red-team requirement "payment with an expired
+  // intent must be REJECTED".
+  if (intent.expiresAt <= Date.now()) {
+    return { ok: false, response: fail(410, "this purchase intent has expired — create a new one") };
+  }
+  // Defense in depth: POST /api/purchase-intents already refuses to create
+  // a self-targeting intent, so this can only fire if that invariant is
+  // ever broken elsewhere.
+  if (intent.buyerWallet === intent.sellerWallet) {
+    return { ok: false, response: fail(400, "you already own this spot") };
+  }
+  return { ok: true, intent };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,10 +227,17 @@ async function handleBuy(body: Record<string, unknown>, actor: string, ip: strin
     const minLamports = solRequiredLamportsWithTolerance(priceSol);
 
     const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: treasury, minLamports });
-    if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    if (!verified.ok) {
+      logAudit("payment_verification_failed", { action: "buy", wallet: actor, reason: verified.error });
+      return fail(402, `payment not verified: ${verified.error}`);
+    }
+    logAudit("payment_verified", { action: "buy", wallet: actor, index });
 
     const firstUse = await claimSignature(signature);
-    if (!firstUse) return fail(409, "this transaction signature was already used");
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "buy", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
 
     const pixel: PixelData = {
       index,
@@ -186,9 +251,34 @@ async function handleBuy(body: Record<string, unknown>, actor: string, ip: strin
       isRented: false,
     };
 
-    const created = await createPixels([pixel]);
+    // SOL-98 Phase 2.1 (fixes P2-F2): a THROWN error here — a real DB/infra
+    // failure, not a clean "index already taken" conflict — must not
+    // permanently burn a signature that already paid the treasury. Release
+    // it and preserve the original error before it reaches the outer
+    // try/catch, so the SAME signature is retryable once the failure
+    // clears. See docs/production-readiness/PHASE-2.1-P2-F2-FIX.md.
+    // SOL-98 Phase 4 (fixes P2-F4 for the treasury paths — GÖREV 2): the
+    // pixel row INSERT, the payment_transactions INSERT, and the
+    // pixel_ownership_history INSERT now happen in ONE Postgres transaction
+    // (see lib/server/pixel-insert-atomic.ts) instead of one insert
+    // followed by two separate best-effort ledger writes.
+    let created: Awaited<ReturnType<typeof insertPixelsAtomic>>;
+    try {
+      created = await insertPixelsAtomic({ pixels: [pixel], signature, wallet: actor, action: "buy", amountSol: priceSol });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "buy", wallet: actor, index });
+      logAudit("db_failure", {
+        where: "insertPixelsAtomic",
+        action: "buy",
+        wallet: actor,
+        index,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (!created.ok) {
-      await releaseSignature(signature);
+      await releaseSignatureSafely(signature, { action: "buy", wallet: actor, index });
+      logAudit("ownership_conflict", { action: "buy", wallet: actor, index });
       return fail(409, "that spot was just sold — pick another, your payment proof is still valid to retry");
     }
     return NextResponse.json({ ok: true, pixel });
@@ -220,10 +310,17 @@ async function handleBuyArea(body: Record<string, unknown>, actor: string, ip: s
     const minLamports = solRequiredLamportsWithTolerance(priceSol);
 
     const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: treasury, minLamports });
-    if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    if (!verified.ok) {
+      logAudit("payment_verification_failed", { action: "buy-area", wallet: actor, reason: verified.error });
+      return fail(402, `payment not verified: ${verified.error}`);
+    }
+    logAudit("payment_verified", { action: "buy-area", wallet: actor, count: typedIndices.length });
 
     const firstUse = await claimSignature(signature);
-    if (!firstUse) return fail(409, "this transaction signature was already used");
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "buy-area", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
 
     const layout = computeBannerLayout(typedIndices, BOARD_SIZE);
     const groupId = `b-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
@@ -244,9 +341,27 @@ async function handleBuyArea(body: Record<string, unknown>, actor: string, ip: s
       ...bannerPosition(index, BOARD_SIZE, layout),
     }));
 
-    const created = await createPixels(pixels);
+    // SOL-98 Phase 2.1 (fixes P2-F2) — same reasoning as handleBuy: a thrown
+    // error must release the signature and preserve the original error.
+    // SOL-98 Phase 4 (fixes P2-F4 for the treasury paths — GÖREV 2) — same
+    // atomic INSERT+ledger RPC as handleBuy above.
+    let created: Awaited<ReturnType<typeof insertPixelsAtomic>>;
+    try {
+      created = await insertPixelsAtomic({ pixels, signature, wallet: actor, action: "buy-area", amountSol: priceSol });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "buy-area", wallet: actor, count: typedIndices.length });
+      logAudit("db_failure", {
+        where: "insertPixelsAtomic",
+        action: "buy-area",
+        wallet: actor,
+        count: typedIndices.length,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (!created.ok) {
-      await releaseSignature(signature);
+      await releaseSignatureSafely(signature, { action: "buy-area", wallet: actor, taken: created.taken.length });
+      logAudit("ownership_conflict", { action: "buy-area", wallet: actor, taken: created.taken.length });
       return fail(
         409,
         `${created.taken.length} of those spots were just sold (#${created.taken.map((i) => i + 1).join(", #")}) — pick another area, your payment proof is still valid to retry`
@@ -263,29 +378,48 @@ async function handleBuyArea(body: Record<string, unknown>, actor: string, ip: s
 // a tight per-wallet rate limit, since it has zero real cost by design.
 // ---------------------------------------------------------------------------
 async function handleHijack(body: Record<string, unknown>, actor: string, ip: string) {
-  const index = body.index;
-  if (!isValidIndex(index)) return fail(400, "invalid index");
-
-  const target = await getPixel(index);
-  if (!target) return fail(404, "nothing to hijack there yet");
-  if (target.owner === actor) return fail(400, "you already own this spot");
-
-  const burnedFraction = await getBurnedFraction();
-  const hijackCost = hijackCostInTokens(burnedFraction);
-  const split = splitHijackBurn(hijackCost);
   const tokenLive = Boolean(PIXEL98_MINT); // server's own env check, never trust the client's claim
 
+  // SOL-98 Phase 3 (fixes P2-F1 / GÖREV 2): once $PIXEL98 is live, a hijack
+  // spends a real verified burn — the exact same substitution exposure as
+  // buy-listing/rent — so it goes through the same purchase_intent system.
+  // The pre-launch simulated path below is free (no on-chain payment at
+  // all), so it keeps using body.index directly; there is nothing to
+  // substitute a free action onto.
   if (tokenLive) {
     if (isRateLimited(`pixels-hijack:${ip}`, 20, 60_000)) return fail(429, "Too many hijack attempts — slow down.");
+    const resolved = await resolveIntent(body, actor, "hijack");
+    if (!resolved.ok) return resolved.response;
+    const intent = resolved.intent;
+    const index = intent.pixelIndex;
     const signature = body.signature;
     if (typeof signature !== "string" || !signature) return fail(400, "missing hijack transaction signature");
 
     return withWriteLock(async () => {
+      const target = await getPixel(index);
+      if (!target) return fail(404, "nothing to hijack there yet");
+      if (target.owner === actor) return fail(400, "you already own this spot");
+      // Defense in depth: the intent's recorded seller must still match the
+      // LIVE owner — closes the staleness window without ever trusting the
+      // client for who the compensation recipient is.
+      if (target.owner !== intent.sellerWallet) {
+        return fail(409, "that spot changed hands since your intent was created — please create a new intent");
+      }
+
+      // Cost is ALWAYS recomputed fresh from the live burned fraction —
+      // never taken from the intent (see app/api/purchase-intents/route.ts's
+      // doc comment on why hijack intents don't lock in a price).
+      const burnedFraction = await getBurnedFraction();
+      const hijackCost = hijackCostInTokens(burnedFraction);
+      const split = splitHijackBurn(hijackCost);
       const burnRaw = await tokenAmountToRaw(PIXEL98_MINT, split.burnedTokens);
       const ownerRaw = await tokenAmountToRaw(PIXEL98_MINT, split.ownerTokens);
 
       const burnVerified = await verifyBurn({ signature, owner: actor, mint: PIXEL98_MINT, minRawAmount: burnRaw });
-      if (!burnVerified.ok) return fail(402, `burn not verified: ${burnVerified.error}`);
+      if (!burnVerified.ok) {
+        logAudit("payment_verification_failed", { action: "hijack", wallet: actor, reason: burnVerified.error });
+        return fail(402, `burn not verified: ${burnVerified.error}`);
+      }
 
       const transferVerified = await verifyTokenTransfer({
         signature,
@@ -294,14 +428,54 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
         mint: PIXEL98_MINT,
         minRawAmount: ownerRaw,
       });
-      if (!transferVerified.ok) return fail(402, `owner compensation not verified: ${transferVerified.error}`);
+      if (!transferVerified.ok) {
+        logAudit("payment_verification_failed", { action: "hijack", wallet: actor, reason: transferVerified.error });
+        return fail(402, `owner compensation not verified: ${transferVerified.error}`);
+      }
+      logAudit("payment_verified", { action: "hijack", wallet: actor, index });
 
       const firstUse = await claimSignature(signature);
-      if (!firstUse) return fail(409, "this hijack transaction signature was already used");
+      if (!firstUse) {
+        logAudit("duplicate_transaction_detected", { action: "hijack", wallet: actor, where: "used_signatures" });
+        return fail(409, "this hijack transaction signature was already used");
+      }
 
-      const result = await hijackPixel(index, (current) => applyHijack(current, actor));
+      const prevOwner = target.owner;
+      // SOL-98 Phase 2.1 (fixes P2-F2) + Phase 3 GÖREV 3 (atomic ledger) — a
+      // thrown error must release the signature and preserve the original
+      // error, not silently burn a verified burn+transfer proof; a
+      // successful mutation's ledger/history rows are now written in the
+      // SAME Postgres transaction as the ownership change itself (see
+      // pixel-mutations-atomic.ts).
+      let result: Awaited<ReturnType<typeof updatePixelOwnerAtomic>>;
+      try {
+        result = await updatePixelOwnerAtomic({
+          index,
+          expectedOwner: prevOwner,
+          mutate: (current) => applyHijack(current, actor),
+          signature,
+          wallet: actor,
+          action: "hijack",
+          mint: PIXEL98_MINT,
+          intentId: intent.id,
+          prevOwner,
+          newOwner: actor,
+          recordHistory: true,
+        });
+      } catch (error) {
+        await releaseSignatureSafely(signature, { action: "hijack", wallet: actor, index });
+        logAudit("db_failure", {
+          where: "updatePixelOwnerAtomic",
+          action: "hijack",
+          wallet: actor,
+          index,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
       if (!result.ok) {
-        await releaseSignature(signature);
+        await releaseSignatureSafely(signature, { action: "hijack", wallet: actor, index });
+        logAudit("ownership_conflict", { action: "hijack", wallet: actor, index });
         return fail(409, "that spot changed hands before your hijack landed — please retry");
       }
       return NextResponse.json({
@@ -314,15 +488,32 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
   }
 
   // Simulated (pre-launch) path — free, so require proof of wallet control
-  // and hard rate-limit it per actor to blunt casual scripted abuse.
+  // and hard rate-limit it per actor to blunt casual scripted abuse. No
+  // purchase intent involved: nothing is paid, so there is nothing to
+  // substitute a payment onto.
+  const index = body.index;
+  if (!isValidIndex(index)) return fail(400, "invalid index");
+  const target = await getPixel(index);
+  if (!target) return fail(404, "nothing to hijack there yet");
+  if (target.owner === actor) return fail(400, "you already own this spot");
+
+  const burnedFraction = await getBurnedFraction();
+  const hijackCost = hijackCostInTokens(burnedFraction);
+  const split = splitHijackBurn(hijackCost);
+
   if (isRateLimited(`pixels-hijack-sim:${actor}`, 5, 10 * 60_000)) {
     return fail(429, "Too many simulated hijacks from this wallet — try again later.");
   }
   const authCheck = readAuth(body, "hijack", index, actor);
   if (!authCheck.ok) return fail(401, authCheck.error);
 
+  const prevOwnerSim = target.owner;
   const result = await hijackPixel(index, (current) => applyHijack(current, actor));
-  if (!result.ok) return fail(409, "that spot changed hands — please retry");
+  if (!result.ok) {
+    logAudit("ownership_conflict", { action: "hijack-simulated", wallet: actor, index });
+    return fail(409, "that spot changed hands — please retry");
+  }
+  await recordOwnershipHistory({ pixelIndex: index, boardId: null, prevOwner: prevOwnerSim, newOwner: actor, action: "hijack" });
   return NextResponse.json({
     ok: true,
     pixel: result.pixel,
@@ -366,9 +557,12 @@ function readAuth(body: Record<string, unknown>, action: string, index: number |
   const timestamp = body.authTimestamp;
   const signature = body.authSignature;
   if (typeof timestamp !== "number" || typeof signature !== "string" || !signature) {
+    logAudit("authorization_failure", { action, wallet: actor, reason: "missing auth proof" });
     return { ok: false as const, error: "missing auth proof" };
   }
-  return verifyAuthProof({ action, index, owner: actor, timestamp, signature });
+  const result = verifyAuthProof({ action, index, owner: actor, timestamp, signature });
+  if (!result.ok) logAudit("authorization_failure", { action, wallet: actor, reason: result.error });
+  return result;
 }
 
 async function handleEdit(body: Record<string, unknown>, actor: string) {
@@ -469,52 +663,114 @@ async function handleUnlist(body: Record<string, unknown>, actor: string) {
 // ---------------------------------------------------------------------------
 async function handleBuyListing(body: Record<string, unknown>, actor: string, ip: string) {
   if (isRateLimited(`pixels-buy:${ip}`, 20, 60_000)) return fail(429, "Too many purchase attempts — slow down.");
-  const index = body.index;
-  if (!isValidIndex(index)) return fail(400, "invalid index");
+  const resolved = await resolveIntent(body, actor, "buy-listing");
+  if (!resolved.ok) return resolved.response;
+  const intent = resolved.intent;
+  const index = intent.pixelIndex;
   const signature = body.signature;
   if (typeof signature !== "string" || !signature) return fail(400, "missing signature");
 
   return withWriteLock(async () => {
     const current = await getPixel(index);
     if (!current) return fail(404, "spot not found");
+    // Defense in depth: the live state must still match what the intent was
+    // created against. This does not RE-TRUST anything from the client —
+    // `seller` and `price` below always come from the intent, never from
+    // this live read or from the request body; this is only a staleness
+    // guard so a listing that changed (or was unlisted) between intent
+    // creation and redemption fails cleanly instead of silently charging
+    // the old terms.
+    if (current.owner !== intent.sellerWallet) {
+      return fail(409, "this listing changed since your intent was created — please create a new intent");
+    }
     if (current.listingPriceSol === undefined && current.listingPricePixel98 === undefined) {
       return fail(400, "spot is not listed for sale");
     }
-    if (current.owner === actor) return fail(400, "you already own this spot");
-    const seller = current.owner;
+    const seller = intent.sellerWallet;
+    const paidPixel98 = intent.currency === "PIXEL98";
 
-    if (current.listingPriceSol !== undefined) {
-      const priceSol = current.listingPriceSol;
+    if (!paidPixel98) {
+      const priceSol = intent.priceSol ?? 0;
+      if (current.listingPriceSol !== priceSol) {
+        return fail(409, "the listing price changed since your intent was created — please create a new intent");
+      }
       const minLamports = solRequiredLamportsWithTolerance(priceSol);
       const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: seller, minLamports });
-      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+      if (!verified.ok) {
+        logAudit("payment_verification_failed", { action: "buy-listing", wallet: actor, reason: verified.error });
+        return fail(402, `payment not verified: ${verified.error}`);
+      }
     } else {
       if (!PIXEL98_MINT) return fail(503, "$PIXEL98 not live yet — this listing can't be paid until launch");
-      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, current.listingPricePixel98 ?? 0);
+      const pricePixel98 = intent.pricePixel98 ?? 0;
+      if (current.listingPricePixel98 !== pricePixel98) {
+        return fail(409, "the listing price changed since your intent was created — please create a new intent");
+      }
+      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, pricePixel98);
       const verified = await verifyTokenTransfer({ signature, fromOwner: actor, toOwner: seller, mint: PIXEL98_MINT, minRawAmount: minRaw });
-      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+      if (!verified.ok) {
+        logAudit("payment_verification_failed", { action: "buy-listing", wallet: actor, reason: verified.error });
+        return fail(402, `payment not verified: ${verified.error}`);
+      }
     }
+    logAudit("payment_verified", { action: "buy-listing", wallet: actor, index });
 
     const firstUse = await claimSignature(signature);
-    if (!firstUse) return fail(409, "this transaction signature was already used");
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "buy-listing", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
 
-    const result = await updateOwnedPixel(index, seller, (existing) => ({
-      ...existing,
-      owner: actor,
-      destination: "",
-      imageUrl: "",
-      message: "",
-      neon: "none",
-      purchasedAt: Date.now(),
-      isRented: false,
-      listingPriceSol: undefined,
-      listingPricePixel98: undefined,
-      rentPriceSol: undefined,
-      rentPricePixel98: undefined,
-      valuationSol: existing.listingPriceSol ?? existing.valuationSol,
-    }));
+    // SOL-98 Phase 2.1 (fixes P2-F2) + Phase 3 GÖREV 1/3 (intent binding +
+    // atomic ledger) — a thrown error must release the signature and
+    // preserve the original error, not silently burn a verified peer-to-
+    // peer payment; the ledger/history rows are now written in the SAME
+    // Postgres transaction as the ownership change (pixel-mutations-atomic.ts),
+    // and the intent is consumed in that same transaction too.
+    let result: Awaited<ReturnType<typeof updatePixelOwnerAtomic>>;
+    try {
+      result = await updatePixelOwnerAtomic({
+        index,
+        expectedOwner: seller,
+        mutate: (existing) => ({
+          ...existing,
+          owner: actor,
+          destination: "",
+          imageUrl: "",
+          message: "",
+          neon: "none",
+          purchasedAt: Date.now(),
+          isRented: false,
+          listingPriceSol: undefined,
+          listingPricePixel98: undefined,
+          rentPriceSol: undefined,
+          rentPricePixel98: undefined,
+          valuationSol: existing.listingPriceSol ?? existing.valuationSol,
+        }),
+        signature,
+        wallet: actor,
+        action: "buy-listing",
+        amountSol: paidPixel98 ? undefined : intent.priceSol,
+        mint: paidPixel98 ? PIXEL98_MINT : null,
+        intentId: intent.id,
+        prevOwner: seller,
+        newOwner: actor,
+        recordHistory: true,
+      });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "buy-listing", wallet: actor, index });
+      logAudit("db_failure", {
+        where: "updatePixelOwnerAtomic",
+        action: "buy-listing",
+        wallet: actor,
+        index,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (!result.ok) {
-      await releaseSignature(signature);
+      await releaseSignatureSafely(signature, { action: "buy-listing", wallet: actor, index });
+      logAudit("ownership_conflict", { action: "buy-listing", wallet: actor, index });
       return fail(409, "this listing changed before your purchase landed — your payment proof is still valid to retry");
     }
     return NextResponse.json({ ok: true, pixel: result.pixel });
@@ -523,49 +779,110 @@ async function handleBuyListing(body: Record<string, unknown>, actor: string, ip
 
 async function handleRent(body: Record<string, unknown>, actor: string, ip: string) {
   if (isRateLimited(`pixels-buy:${ip}`, 20, 60_000)) return fail(429, "Too many purchase attempts — slow down.");
-  const index = body.index;
-  if (!isValidIndex(index)) return fail(400, "invalid index");
-  const days = body.days;
-  if (typeof days !== "number" || !Number.isInteger(days) || days <= 0 || days > 365) {
-    return fail(400, "invalid days (1-365)");
-  }
+  const resolved = await resolveIntent(body, actor, "rent");
+  if (!resolved.ok) return resolved.response;
+  const intent = resolved.intent;
+  const index = intent.pixelIndex;
+  const days = intent.rentDays ?? 0; // committed at intent creation, never re-read from the body
   const signature = body.signature;
   if (typeof signature !== "string" || !signature) return fail(400, "missing signature");
 
   return withWriteLock(async () => {
     const current = await getPixel(index);
     if (!current) return fail(404, "spot not found");
+    if (current.owner !== intent.sellerWallet) {
+      return fail(409, "this listing changed since your intent was created — please create a new intent");
+    }
     if (current.rentPriceSol === undefined && current.rentPricePixel98 === undefined) {
       return fail(400, "spot is not listed for rent");
     }
-    if (current.owner === actor) return fail(400, "you already own this spot");
-    const owner = current.owner;
+    const owner = intent.sellerWallet;
+    const paidPixel98 = intent.currency === "PIXEL98";
 
-    if (current.rentPriceSol !== undefined) {
-      const priceSol = current.rentPriceSol * days;
+    if (!paidPixel98) {
+      if (current.rentPriceSol === undefined) {
+        return fail(409, "this spot is no longer listed for rent in SOL — please create a new intent");
+      }
+      const priceSol = intent.priceSol ?? 0;
+      // Staleness guard: recompute the total from the LIVE per-day rate and
+      // the intent-committed day count, and require it to still match what
+      // was locked in at intent creation.
+      if (current.rentPriceSol * days !== priceSol) {
+        return fail(409, "the rent price changed since your intent was created — please create a new intent");
+      }
       const minLamports = solRequiredLamportsWithTolerance(priceSol);
       const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: owner, minLamports });
-      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+      if (!verified.ok) {
+        logAudit("payment_verification_failed", { action: "rent", wallet: actor, reason: verified.error });
+        return fail(402, `payment not verified: ${verified.error}`);
+      }
     } else {
       if (!PIXEL98_MINT) return fail(503, "$PIXEL98 not live yet — this listing can't be paid until launch");
-      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, (current.rentPricePixel98 ?? 0) * days);
+      if (current.rentPricePixel98 === undefined) {
+        return fail(409, "this spot is no longer listed for rent in $PIXEL98 — please create a new intent");
+      }
+      const pricePixel98 = intent.pricePixel98 ?? 0;
+      if (current.rentPricePixel98 * days !== pricePixel98) {
+        return fail(409, "the rent price changed since your intent was created — please create a new intent");
+      }
+      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, pricePixel98);
       const verified = await verifyTokenTransfer({ signature, fromOwner: actor, toOwner: owner, mint: PIXEL98_MINT, minRawAmount: minRaw });
-      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+      if (!verified.ok) {
+        logAudit("payment_verification_failed", { action: "rent", wallet: actor, reason: verified.error });
+        return fail(402, `payment not verified: ${verified.error}`);
+      }
     }
+    logAudit("payment_verified", { action: "rent", wallet: actor, index });
 
     const firstUse = await claimSignature(signature);
-    if (!firstUse) return fail(409, "this transaction signature was already used");
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "rent", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
 
-    const result = await updateOwnedPixel(index, owner, (existing) => ({
-      ...existing,
-      isRented: true,
-      rentedTo: actor,
-      rentedUntil: Date.now() + days * 24 * 60 * 60 * 1000,
-      rentPriceSol: undefined,
-      rentPricePixel98: undefined,
-    }));
+    // SOL-98 Phase 2.1 (fixes P2-F2) + Phase 3 GÖREV 1/3 — same reasoning as
+    // handleBuyListing.
+    let result: Awaited<ReturnType<typeof updatePixelOwnerAtomic>>;
+    try {
+      result = await updatePixelOwnerAtomic({
+        index,
+        expectedOwner: owner,
+        mutate: (existing) => ({
+          ...existing,
+          isRented: true,
+          rentedTo: actor,
+          rentedUntil: Date.now() + days * 24 * 60 * 60 * 1000,
+          rentPriceSol: undefined,
+          rentPricePixel98: undefined,
+        }),
+        signature,
+        wallet: actor,
+        action: "rent",
+        amountSol: paidPixel98 ? undefined : intent.priceSol,
+        mint: paidPixel98 ? PIXEL98_MINT : null,
+        intentId: intent.id,
+        // Rent changes usage rights (rentedTo/rentedUntil), not `owner` —
+        // no ownership_history entry (see ownership-history.ts doc
+        // comment); still recorded in payment_transactions as a real
+        // payment, atomically with the mutation.
+        prevOwner: owner,
+        newOwner: owner,
+        recordHistory: false,
+      });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "rent", wallet: actor, index });
+      logAudit("db_failure", {
+        where: "updatePixelOwnerAtomic",
+        action: "rent",
+        wallet: actor,
+        index,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (!result.ok) {
-      await releaseSignature(signature);
+      await releaseSignatureSafely(signature, { action: "rent", wallet: actor, index });
+      logAudit("ownership_conflict", { action: "rent", wallet: actor, index });
       return fail(409, "this listing changed before your rental landed — your payment proof is still valid to retry");
     }
     return NextResponse.json({ ok: true, pixel: result.pixel });

@@ -13,7 +13,10 @@ import {
 } from "@/lib/board-types";
 import { formatSol } from "@/lib/pricing";
 import { isTokenLive, shortenAddress } from "@/lib/solana";
+import { TOKEN_SYMBOL } from "@/lib/token";
+import { friendlyIntentError } from "@/lib/purchase-intent";
 import type { NeonTemplate } from "@/lib/pixel-types";
+import { IntentCountdown } from "./intent-countdown";
 import { Win98Alert } from "./win98-alert";
 
 const NEON_OPTIONS: { value: NeonTemplate; label: string }[] = [
@@ -216,7 +219,8 @@ function SubBlockDialog({
   pixel: BoardPixel | undefined;
   onClose: () => void;
 }) {
-  const { editPixel, listForSale, listForRent, unlist, buyListing, rentPixel, hijackPixel } = useBoards();
+  const { editPixel, listForSale, listForRent, unlist, buyListing, rentPixel, hijackPixel, hijackCostTokens, hijackSplit, activeIntent, txPhase } =
+    useBoards();
   const { publicKey, connected } = useWallet();
   const me = publicKey?.toBase58() ?? "";
 
@@ -232,7 +236,14 @@ function SubBlockDialog({
   const listed = pixel?.listingPriceSol !== undefined || pixel?.rentPriceSol !== undefined;
 
   function showErr(e: unknown) {
-    setAlert({ kind: "error", title: "Failed", message: e instanceof Error ? e.message : "Action failed" });
+    // SOL-98 Phase 4 (GÖREV 1) — buyListing/rentPixel/hijackPixel now all
+    // reserve a purchase intent before paying (see lib/board-store.tsx); a
+    // 410/403/409 here is mapped to a message the user can act on instead
+    // of the raw HTTP error. Other actions (editPixel/listForSale/
+    // listForRent/unlist) don't go through the intent system, but
+    // friendlyIntentError safely falls back to the original message for
+    // those too.
+    setAlert({ kind: "error", title: "Failed", message: friendlyIntentError(e) });
   }
 
   async function run(fn: () => Promise<unknown>, successMsg: string) {
@@ -303,9 +314,35 @@ function SubBlockDialog({
 
           {!isOwner && (
             <>
+              {/* SOL-98 Phase 4 (GÖREV 3) — live cost estimate, driven off
+                  the polled burnedFraction. hijackPixel() (lib/board-store.tsx)
+                  reserves a purchase intent first, which does NOT lock this
+                  number in (Phase 3 decision — burnedFraction moves
+                  continuously); it's recomputed fresh again right before the
+                  wallet is asked to sign, so this is a live estimate, not a
+                  stale/cached figure. */}
+              {isTokenLive() && (
+                <div className="text-[11px] text-[#808080]">
+                  {busy ? "Locking in current price…" : `Est. cost: ${hijackCostTokens} ${TOKEN_SYMBOL}`}
+                  {" "}({hijackSplit.burnedTokens} burned · {hijackSplit.ownerTokens} to owner)
+                </div>
+              )}
               <button type="button" className="win98-button" disabled={busy} onClick={() => run(() => hijackPixel(boardId, index), "Hijacked — valuation −5%.")}>
-                {busy ? "Hijacking…" : isTokenLive() ? "Hijack (burn)" : "Hijack (simulated, free)"}
+                {busy
+                  ? txPhase === "creating_intent"
+                    ? "Locking price…"
+                    : txPhase === "awaiting_signature"
+                      ? isTokenLive()
+                        ? "Confirm burn…"
+                        : "Confirm signature…"
+                      : "Hijacking…"
+                  : isTokenLive()
+                    ? "Hijack (burn)"
+                    : "Hijack (simulated, free)"}
               </button>
+              {isTokenLive() && activeIntent?.actionType === "hijack" && (
+                <IntentCountdown expiresAt={activeIntent.expiresAt} />
+              )}
               {!isTokenLive() && (
                 <div className="text-[11px] text-[#808080]">
                   $PIXEL98 not live yet — free, wallet-signed, rate-limited simulated hijack. Real burns activate after launch.
@@ -313,13 +350,24 @@ function SubBlockDialog({
               )}
               {pixel?.listingPriceSol !== undefined && (
                 <button type="button" className="win98-button" disabled={busy} onClick={() => run(() => buyListing(boardId, index), "Purchased.")}>
-                  Buy — {formatSol(pixel.listingPriceSol)} SOL
+                  {busy && (activeIntent?.actionType === "buy-listing" || txPhase === "creating_intent")
+                    ? txPhase === "creating_intent"
+                      ? "Locking price…"
+                      : "Confirm in wallet…"
+                    : `Buy — ${formatSol(pixel.listingPriceSol)} SOL`}
                 </button>
               )}
               {pixel?.rentPriceSol !== undefined && (
                 <button type="button" className="win98-button" disabled={busy} onClick={() => run(() => rentPixel(boardId, index, 30), "Rented 30 days.")}>
-                  Rent 30d — {formatSol(pixel.rentPriceSol)} SOL/day
+                  {busy && (activeIntent?.actionType === "rent" || txPhase === "creating_intent")
+                    ? txPhase === "creating_intent"
+                      ? "Locking price…"
+                      : "Confirm in wallet…"
+                    : `Rent 30d — ${formatSol(pixel.rentPriceSol)} SOL/day`}
                 </button>
+              )}
+              {activeIntent && (activeIntent.actionType === "buy-listing" || activeIntent.actionType === "rent") && (
+                <IntentCountdown expiresAt={activeIntent.expiresAt} />
               )}
               {pixel?.listingPricePixel98 !== undefined && <div className="text-[11px] text-[#808080]">Listed @ {pixel.listingPricePixel98} $PIXEL98 (after launch)</div>}
               {pixel?.rentPricePixel98 !== undefined && <div className="text-[11px] text-[#808080]">Rent {pixel.rentPricePixel98} $PIXEL98/day (after launch)</div>}

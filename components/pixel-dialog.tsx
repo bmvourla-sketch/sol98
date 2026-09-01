@@ -9,6 +9,8 @@ import { bulkPriceBreakdown, formatSol } from "@/lib/pricing";
 import { TOKEN_SYMBOL } from "@/lib/token";
 import { isTokenLive, shortenAddress } from "@/lib/solana";
 import { isSafeImageUrl, isSafeLinkUrl } from "@/lib/pixel-types";
+import { friendlyIntentError } from "@/lib/purchase-intent";
+import { IntentCountdown } from "./intent-countdown";
 import { Win98Alert } from "./win98-alert";
 
 interface PixelDialogProps {
@@ -16,7 +18,7 @@ interface PixelDialogProps {
   onClose: () => void;
 }
 
-type TxStatus = "idle" | "awaiting_signature" | "processing" | "success" | "failed";
+type TxStatus = "idle" | "creating_intent" | "awaiting_signature" | "processing" | "success" | "failed";
 
 const NEON_OPTIONS: { value: NeonTemplate; label: string }[] = [
   { value: "none", label: "None" },
@@ -58,6 +60,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
     areaPriceFor,
     hijackCostFor,
     hijackSplit,
+    activeIntent,
     buyPixel,
     buyArea,
     hijackPixel,
@@ -89,7 +92,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
         ? "manage"
         : "hijack";
   const hijackCost = pixel ? hijackCostFor(index) : 0;
-  const busy = txStatus === "awaiting_signature" || txStatus === "processing";
+  const busy = txStatus === "creating_intent" || txStatus === "awaiting_signature" || txStatus === "processing";
   const price = multi ? areaPriceFor(indices.length) : nextPriceSol;
 
   const areaCols = Math.max(...indices.map((i) => i % 100)) - Math.min(...indices.map((i) => i % 100)) + 1;
@@ -153,12 +156,14 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
   async function handleHijack() {
     // Pre-launch this is the documented FREE "simulated" hijack (wallet-signed,
     // rate-limited, no token required) — only the real on-chain burn requires
-    // $PIXEL98 to be live, and that branch is chosen server-side/in usePixels().
+    // $PIXEL98 to be live, and that branch (which now reserves a purchase
+    // intent first — see lib/pixel-store.tsx, SOL-98 Phase 3/4) is chosen
+    // server-side/in usePixels().
     if (!connected || !publicKey) {
       setAlert({ kind: "error", title: "Wallet", message: "Connect your wallet first (top-right)." });
       return;
     }
-    setTxStatus("awaiting_signature");
+    setTxStatus(tokenLive ? "creating_intent" : "awaiting_signature");
     try {
       const outcome = await hijackPixel(index);
       setTxStatus("success");
@@ -170,7 +175,12 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
         }`,
       });
     } catch (error) {
-      showError("Hijack Failed", error instanceof Error ? error.message : "Hijack failed");
+      // SOL-98 Phase 4 (GÖREV 1) — maps 410 (the intent expired before the
+      // burn landed) / 403 (shouldn't normally happen here, but the wallet
+      // could switch accounts mid-flow) / 409 (the spot changed hands, or
+      // the burnedFraction moved and the intent was already redeemed) to a
+      // message the user can act on.
+      showError("Hijack Failed", friendlyIntentError(error));
     }
   }
 
@@ -270,6 +280,9 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
                   ownership, rate-limited, no tokens burned. Real burns activate after launch.
                 </span>
               )}
+              {tokenLive && activeIntent?.actionType === "hijack" && (
+                <IntentCountdown expiresAt={activeIntent.expiresAt} />
+              )}
             </div>
           )}
 
@@ -330,17 +343,19 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
             )}
             {mode === "hijack" && (
               <button type="button" className="win98-button" onClick={handleHijack} disabled={busy}>
-                {txStatus === "awaiting_signature"
-                  ? tokenLive
-                    ? "Confirm burn…"
-                    : "Confirm signature…"
-                  : txStatus === "processing"
+                {txStatus === "creating_intent"
+                  ? "Locking in current price…"
+                  : txStatus === "awaiting_signature"
                     ? tokenLive
-                      ? "Burning…"
-                      : "Hijacking…"
-                    : tokenLive
-                      ? `Hijack (${hijackCost})`
-                      : "Hijack (simulated, free)"}
+                      ? "Confirm burn…"
+                      : "Confirm signature…"
+                    : txStatus === "processing"
+                      ? tokenLive
+                        ? "Burning…"
+                        : "Hijacking…"
+                      : tokenLive
+                        ? `Hijack (${hijackCost})`
+                        : "Hijack (simulated, free)"}
               </button>
             )}
             {mode === "manage" && (

@@ -91,6 +91,38 @@ async function buyBoard(route: Awaited<ReturnType<typeof freshRoute>>, owner: Ke
   return (await res.json()).file as { id: string };
 }
 
+// SOL-98 Phase 3 (MARKET SECURITY) — mirrors tests/pixels-route.test.ts's
+// makeIntent helper: buy-listing / rent / hijack(live) now require a
+// server-issued purchase_intent bound to (boardId, index).
+async function makeIntent(opts: {
+  actionType: "buy-listing" | "rent" | "hijack";
+  boardId: string;
+  index: number;
+  buyer: Keypair;
+  seller: Keypair;
+  currency?: "SOL" | "PIXEL98";
+  priceSol?: number;
+  pricePixel98?: number;
+  mint?: string | null;
+  rentDays?: number;
+}) {
+  const { createIntent } = await import("../lib/server/intent-db");
+  const intent = await createIntent({
+    actionType: opts.actionType,
+    boardId: opts.boardId,
+    pixelIndex: opts.index,
+    buyerWallet: opts.buyer.publicKey.toBase58(),
+    sellerWallet: opts.seller.publicKey.toBase58(),
+    currency: opts.currency ?? "SOL",
+    priceSol: opts.priceSol,
+    pricePixel98: opts.pricePixel98,
+    mint: opts.mint ?? null,
+    rentDays: opts.rentDays,
+    ttlMs: 15 * 60_000,
+  });
+  return intent.id;
+}
+
 beforeEach(async () => {
   await rmForce(DATA_DIR);
 });
@@ -183,17 +215,20 @@ describe("POST /api/boards — hijack (pre-launch simulated vs post-launch real 
   });
 
   it("post-launch: requires a verified burn signature", async () => {
-    const route = await freshRoute({ pixel98Mint: Keypair.generate().publicKey.toBase58() });
+    const mint = Keypair.generate().publicKey.toBase58();
+    const route = await freshRoute({ pixel98Mint: mint });
     const alice = Keypair.generate();
     const hijacker = Keypair.generate();
     const file = await buyBoard(route, alice, "sig-board-6");
+    const intentId1 = await makeIntent({ actionType: "hijack", boardId: file.id, index: 3, buyer: hijacker, seller: alice, currency: "PIXEL98", mint });
 
     verifyBurnMock.mockResolvedValue({ ok: false, error: "no burn" });
-    const res = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), boardId: file.id, index: 3, signature: "burn-sig" }));
+    const res = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "burn-sig", intentId: intentId1 }));
     expect(res.status).toBe(402);
 
     verifyBurnMock.mockResolvedValue({ ok: true });
-    const ok = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), boardId: file.id, index: 3, signature: "burn-sig-2" }));
+    const intentId2 = await makeIntent({ actionType: "hijack", boardId: file.id, index: 3, buyer: hijacker, seller: alice, currency: "PIXEL98", mint });
+    const ok = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "burn-sig-2", intentId: intentId2 }));
     expect(ok.status).toBe(200);
     expect((await ok.json()).pixel.owner).toBe(hijacker.publicKey.toBase58());
   });
@@ -208,8 +243,9 @@ describe("POST /api/boards — buy-listing / rent (peer-to-peer)", () => {
 
     const listAuth = signAuth(alice, "board-list-sale", 10);
     await route.POST(post({ action: "list-sale", actor: alice.publicKey.toBase58(), boardId: file.id, index: 10, price: 1, currency: "SOL", ...listAuth }));
+    const intentId = await makeIntent({ actionType: "buy-listing", boardId: file.id, index: 10, buyer: bob, seller: alice, priceSol: 1 });
 
-    const res = await route.POST(post({ action: "buy-listing", actor: bob.publicKey.toBase58(), boardId: file.id, index: 10, signature: "sig-p2p" }));
+    const res = await route.POST(post({ action: "buy-listing", actor: bob.publicKey.toBase58(), signature: "sig-p2p", intentId }));
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.pixel.owner).toBe(bob.publicKey.toBase58());
@@ -232,8 +268,9 @@ describe("POST /api/boards — buy-listing / rent (peer-to-peer)", () => {
 
     const rentAuth = signAuth(alice, "board-list-rent", 20);
     await route.POST(post({ action: "list-rent", actor: alice.publicKey.toBase58(), boardId: file.id, index: 20, pricePerDay: 0.1, currency: "SOL", ...rentAuth }));
+    const intentId = await makeIntent({ actionType: "rent", boardId: file.id, index: 20, buyer: bob, seller: alice, priceSol: 0.1 * 7, rentDays: 7 });
 
-    const res = await route.POST(post({ action: "rent", actor: bob.publicKey.toBase58(), boardId: file.id, index: 20, days: 7, signature: "sig-rent" }));
+    const res = await route.POST(post({ action: "rent", actor: bob.publicKey.toBase58(), signature: "sig-rent", intentId }));
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.pixel.isRented).toBe(true);

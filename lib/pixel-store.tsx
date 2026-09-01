@@ -17,17 +17,29 @@ import { areaPrice, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing
 import { airdropFor, hijackCostInTokens, splitHijackBurn } from "./token";
 import { PIXEL98_MINT } from "./solana";
 import { useHijackBurn, useSendSolTransfer, useSignAuthMessage } from "./use-solana-tx";
+import { createPurchaseIntent, postJson, type IntentActionType } from "./purchase-intent";
 import type { AdContent, PixelData } from "./pixel-types";
 
 export type { AdContent, NeonTemplate, PixelData } from "./pixel-types";
 
 export type SyncState = "loading" | "live" | "offline";
 
-/** Awaiting-signature / confirming — surfaced so dialogs can show progress. */
-export type TxPhase = "awaiting_signature" | "processing" | null;
+/** Creating-intent / awaiting-signature / confirming — surfaced so dialogs can show progress. */
+export type TxPhase = "creating_intent" | "awaiting_signature" | "processing" | null;
 
 /** Which currency a market listing is priced in. */
 export type ListingCurrency = "SOL" | "PIXEL98";
+
+/**
+ * SOL-98 Phase 4 (GÖREV 1) — the purchase intent currently reserved for a
+ * buy-listing / rent / hijack flow, if any. Surfaced so dialogs can show the
+ * "complete within Xm Ys" UX (see components/intent-countdown.tsx).
+ */
+export interface ActiveIntent {
+  intentId: string;
+  actionType: IntentActionType;
+  expiresAt: number;
+}
 
 interface PixelContextValue {
   pixels: Record<number, PixelData>;
@@ -38,6 +50,7 @@ interface PixelContextValue {
   syncState: SyncState;
   connectedOwner: string;
   txPhase: TxPhase;
+  activeIntent: ActiveIntent | null;
   areaPriceFor: (count: number) => number;
   /** Current hijack burn tier inputs (driven by cumulative burned supply). */
   burnedFraction: number;
@@ -134,17 +147,14 @@ function mergePixels(
   return next;
 }
 
+// SOL-98 Phase 4 (GÖREV 1) — routed through lib/purchase-intent.ts's shared
+// postJson() so the thrown error preserves the HTTP status (410 expired
+// intent / 403 foreign wallet's intent / 409 listing changed or intent
+// already consumed — see that module's friendlyIntentError) and so this is
+// the SAME code path tests/integration/phase4-frontend-intent-staging.test.ts
+// exercises against real staging.
 async function postAction<T>(action: string, payload: Record<string, unknown>): Promise<T> {
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...payload }),
-  });
-  const json = (await res.json().catch(() => ({}))) as { error?: string } & T;
-  if (!res.ok) {
-    throw new Error(json.error || `request failed (${res.status})`);
-  }
-  return json;
+  return postJson<T>(API_URL, { action, ...payload });
 }
 
 export function PixelProvider({ children }: { children: ReactNode }) {
@@ -156,6 +166,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
   const [pixels, setPixels] = useState<Record<number, PixelData>>({});
   const [syncState, setSyncState] = useState<SyncState>("loading");
   const [txPhase, setTxPhase] = useState<TxPhase>(null);
+  const [activeIntent, setActiveIntent] = useState<ActiveIntent | null>(null);
   const [burnedFraction, setBurnedFraction] = useState(0);
   const hydrated = useRef(false);
 
@@ -258,24 +269,43 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       const target = pixels[index];
       if (!target) throw new Error("Nothing to hijack there yet");
       const tokenLive = Boolean(PIXEL98_MINT);
-      const split = splitHijackBurn(hijackCostInTokens(burnedFraction));
 
       try {
         if (tokenLive) {
+          // SOL-98 Phase 3/4 (fixes P2-F1, GÖREV 1/3): a real burn spends
+          // real value, so — exactly like buy-listing/rent — this MUST go
+          // through a server-issued purchase intent before the wallet ever
+          // signs anything. The intent does not lock in a cost (Phase 3
+          // decision — burnedFraction moves continuously); instead the
+          // preview it returns IS the freshly-recomputed cost at the moment
+          // of signing, which is exactly what GÖREV 3 asks the UI to
+          // reflect — closer to redemption-time than a burnedFraction
+          // value that could be up to POLL_MS (20s) stale from the last
+          // board poll.
+          setTxPhase("creating_intent");
+          const intent = await createPurchaseIntent({ actor, actionType: "hijack", boardId: null, index });
+          setActiveIntent({ intentId: intent.intentId, actionType: "hijack", expiresAt: intent.expiresAt });
+          const burnedTokens = intent.burnedTokensPreview ?? 0;
+          const ownerTokens = intent.ownerTokensPreview ?? 0;
+
           setTxPhase("awaiting_signature");
           const outcome = await hijackBurn(
-            { owner: target.owner, burnTokens: split.burnedTokens, transferTokens: split.ownerTokens },
+            { owner: intent.sellerWallet, burnTokens: burnedTokens, transferTokens: ownerTokens },
             () => setTxPhase("processing")
           );
           const result = await postAction<{ pixel: PixelData; simulated: boolean }>("hijack", {
             actor,
-            index,
+            intentId: intent.intentId,
             signature: outcome.signature,
           });
           setPixels((prev) => ({ ...prev, [index]: result.pixel }));
           return result;
         }
 
+        // Pre-launch simulated path — free, no payment, so nothing to
+        // substitute a payment onto: no intent involved, unchanged from
+        // before Phase 3.
+        setTxPhase("awaiting_signature");
         const auth = await signAuth("hijack", index);
         const result = await postAction<{ pixel: PixelData; simulated: boolean }>("hijack", {
           actor,
@@ -286,9 +316,10 @@ export function PixelProvider({ children }: { children: ReactNode }) {
         return result;
       } finally {
         setTxPhase(null);
+        setActiveIntent(null);
       }
     },
-    [requireWallet, pixels, burnedFraction, hijackBurn, signAuth]
+    [requireWallet, pixels, hijackBurn, signAuth]
   );
 
   const editPixel = useCallback(
@@ -363,16 +394,27 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       if (!current || (current.listingPriceSol === undefined && current.listingPricePixel98 === undefined)) {
         throw new Error("Not listed for sale");
       }
+      if (current.listingPriceSol === undefined) {
+        throw new Error("This listing is priced in $PIXEL98 — available after launch");
+      }
       try {
-        if (current.listingPriceSol === undefined) {
-          throw new Error("This listing is priced in $PIXEL98 — available after launch");
-        }
-        const signature = await sendTransfer(current.listingPriceSol, new PublicKey(current.owner));
-        const result = await postAction<{ pixel: PixelData }>("buy-listing", { actor, index, signature });
+        // SOL-98 Phase 3/4 (fixes P2-F1, GÖREV 1): reserve a purchase
+        // intent BEFORE the wallet signs anything — the server re-reads the
+        // live listing itself and returns the authoritative price + seller,
+        // which is what the payment is built from below (never this
+        // function's own `current`, which can be up to POLL_MS stale).
+        setTxPhase("creating_intent");
+        const intent = await createPurchaseIntent({ actor, actionType: "buy-listing", boardId: null, index });
+        setActiveIntent({ intentId: intent.intentId, actionType: "buy-listing", expiresAt: intent.expiresAt });
+        const priceSol = intent.priceSol ?? current.listingPriceSol;
+
+        const signature = await sendTransfer(priceSol, new PublicKey(intent.sellerWallet));
+        const result = await postAction<{ pixel: PixelData }>("buy-listing", { actor, intentId: intent.intentId, signature });
         setPixels((prev) => ({ ...prev, [index]: result.pixel }));
         return result.pixel;
       } finally {
         setTxPhase(null);
+        setActiveIntent(null);
       }
     },
     [requireWallet, pixels, sendTransfer]
@@ -385,16 +427,22 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       if (!current || (current.rentPriceSol === undefined && current.rentPricePixel98 === undefined)) {
         throw new Error("Not listed for rent");
       }
+      if (current.rentPriceSol === undefined) {
+        throw new Error("This listing is priced in $PIXEL98 — available after launch");
+      }
       try {
-        if (current.rentPriceSol === undefined) {
-          throw new Error("This listing is priced in $PIXEL98 — available after launch");
-        }
-        const signature = await sendTransfer(current.rentPriceSol * days, new PublicKey(current.owner));
-        const result = await postAction<{ pixel: PixelData }>("rent", { actor, index, days, signature });
+        setTxPhase("creating_intent");
+        const intent = await createPurchaseIntent({ actor, actionType: "rent", boardId: null, index, days });
+        setActiveIntent({ intentId: intent.intentId, actionType: "rent", expiresAt: intent.expiresAt });
+        const priceSol = intent.priceSol ?? current.rentPriceSol * days;
+
+        const signature = await sendTransfer(priceSol, new PublicKey(intent.sellerWallet));
+        const result = await postAction<{ pixel: PixelData }>("rent", { actor, intentId: intent.intentId, signature });
         setPixels((prev) => ({ ...prev, [index]: result.pixel }));
         return result.pixel;
       } finally {
         setTxPhase(null);
+        setActiveIntent(null);
       }
     },
     [requireWallet, pixels, sendTransfer]
@@ -437,6 +485,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       syncState,
       connectedOwner: owner,
       txPhase,
+      activeIntent,
       areaPriceFor,
       burnedFraction,
       hijackCostTokens: hijackCostInTokens(burnedFraction),
@@ -462,6 +511,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       syncState,
       owner,
       txPhase,
+      activeIntent,
       areaPriceFor,
       burnedFraction,
       hijackCostFor,

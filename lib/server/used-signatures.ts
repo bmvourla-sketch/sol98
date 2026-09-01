@@ -6,8 +6,9 @@ import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
 
-import { isSupabaseConfigured, supabaseBaseUrl, supabaseHeaders } from "./supabase-env";
+import { isSupabaseConfigured, requireDurableStore, supabaseBaseUrl, supabaseHeaders } from "./supabase-env";
 import { createMutex } from "./mutex";
+import { logAudit } from "./audit-log";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "used-signatures.json");
@@ -57,6 +58,7 @@ async function claimSupabase(signature: string): Promise<boolean> {
 
 /** Returns true the FIRST time a signature is claimed; false on every reuse. */
 export async function claimSignature(signature: string): Promise<boolean> {
+  requireDurableStore();
   if (isSupabaseConfigured()) return claimSupabase(signature);
   return claimFile(signature);
 }
@@ -85,4 +87,38 @@ export async function releaseSignature(signature: string): Promise<void> {
     await fs.writeFile(tmp, JSON.stringify(Array.from(set)), "utf8");
     await fs.rename(tmp, FILE);
   });
+}
+
+/**
+ * SOL-98 Phase 2.1 (fixes P2-F2, see docs/production-readiness/
+ * PHASE-2.1-P2-F2-FIX.md): same contract as `releaseSignature`, but never
+ * throws.
+ *
+ * Call sites release a signature while ALREADY handling a failed ownership
+ * mutation (a structured conflict, or a thrown DB/infra error) — in both
+ * cases the caller needs to report the ORIGINAL failure to the client
+ * (a clean 409 conflict, or the real 500 error), not have that response
+ * replaced by an unrelated failure from the release attempt itself. On the
+ * Supabase/production backend `releaseSignature` already never throws (its
+ * DELETE is wrapped in `.catch(() => undefined)`), so this wrapper changes
+ * nothing there; it only guards the file-store/dev backend, where a release
+ * write can throw on a real disk error. Either way, a release failure is
+ * never silently pretended to have succeeded — it's logged via `audit-log`
+ * so it stays operationally visible (see the PHASE-2.1 report's release-
+ * failure analysis for what this can and can't guarantee).
+ */
+export async function releaseSignatureSafely(
+  signature: string,
+  context: Record<string, unknown> = {}
+): Promise<void> {
+  try {
+    await releaseSignature(signature);
+  } catch (error) {
+    logAudit("db_failure", {
+      where: "releaseSignature",
+      signature,
+      ...context,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }

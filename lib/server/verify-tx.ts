@@ -8,7 +8,7 @@ import type { ParsedInstruction, PartiallyDecodedInstruction } from "@solana/web
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, getMint } from "@solana/spl-token";
 
-import { getServerConnection } from "./rpc";
+import { assertMainnetInProduction, getServerConnection } from "./rpc";
 import { solToLamports } from "@/lib/solana";
 
 const MAX_TX_AGE_MS = 15 * 60 * 1000; // 15 minutes — bounds (doesn't replace) replay risk
@@ -38,6 +38,11 @@ function normalizePubkey(value: string): string | null {
 async function fetchConfirmedTx(signature: string) {
   if (!/^[1-9A-HJ-NP-Za-km-z]{64,100}$/.test(signature)) {
     return { ok: false as const, error: "malformed signature" };
+  }
+  try {
+    await assertMainnetInProduction();
+  } catch (error) {
+    return { ok: false as const, error: error instanceof Error ? error.message : "network verification failed" };
   }
   const connection = getServerConnection();
   const tx = await connection.getParsedTransaction(signature, {

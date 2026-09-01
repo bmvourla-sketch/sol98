@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.mts",
+    "migrate:dryrun": "node scripts/import-json-dryrun.mjs"
   },
   "dependencies": {
     "@noble/curves": "^1.9.7",

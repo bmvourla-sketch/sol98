@@ -13,9 +13,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getParsedTransactionMock = vi.fn();
 const getMintMock = vi.fn();
+// This file tests payment verification (verifySolTransfer/verifyBurn/
+// verifyTokenTransfer), not the network guard — assertMainnetInProduction
+// is mocked as an always-passing no-op here so those tests aren't coupled
+// to it. The guard itself (including its NODE_ENV gating and real
+// mainnet-vs-devnet rejection behavior) is tested end-to-end, unmocked,
+// in tests/network-guard.test.ts.
+const assertMainnetInProductionMock = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../lib/server/rpc", () => ({
   getServerConnection: () => ({ getParsedTransaction: getParsedTransactionMock }),
+  assertMainnetInProduction: assertMainnetInProductionMock,
 }));
 
 vi.mock("@solana/spl-token", async (importOriginal) => {

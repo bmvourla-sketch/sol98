@@ -16,16 +16,33 @@ import { PublicKey } from "@solana/web3.js";
 import { useHijackBurn, useSendSolTransfer, useSignAuthMessage } from "./use-solana-tx";
 import { PIXEL98_MINT, getTreasuryPublicKey } from "./solana";
 import { hijackCostInTokens, splitHijackBurn } from "./token";
+import { createPurchaseIntent, postJson, type IntentActionType } from "./purchase-intent";
 import { nextBoardFilePrice, type BoardFile, type BoardPixel } from "./board-types";
 import type { AdContent } from "./pixel-types";
 
 export type { BoardFile, BoardPixel } from "./board-types";
 export type ListingCurrency = "SOL" | "PIXEL98";
 
+/** SOL-98 Phase 4 (GÖREV 1) — mirrors lib/pixel-store.tsx's ActiveIntent. */
+export interface ActiveIntent {
+  intentId: string;
+  actionType: IntentActionType;
+  expiresAt: number;
+}
+
 interface BoardContextValue {
   files: BoardFile[];
   pixels: Record<string, BoardPixel>;
   burnedFraction: number;
+  /** Live (pre-click) hijack cost estimate — same shape/derivation as
+   * pixel-store.tsx's, driven off the polled `burnedFraction`. The
+   * authoritative figure used at wallet-confirmation time comes from the
+   * purchase intent's own preview (see GÖREV 3 in
+   * docs/production-readiness/PHASE-4-FRONTEND-TOKEN-PREP.md). */
+  hijackCostTokens: number;
+  hijackSplit: { burnedTokens: number; ownerTokens: number };
+  txPhase: "creating_intent" | "awaiting_signature" | "processing" | null;
+  activeIntent: ActiveIntent | null;
   nextFilePriceSol: number;
   buyBoard: (name: string) => Promise<BoardFile>;
   renameBoard: (boardId: string, newName: string) => Promise<BoardFile>;
@@ -43,17 +60,10 @@ const POLL_MS = 20_000;
 
 const BoardContext = createContext<BoardContextValue | null>(null);
 
+// SOL-98 Phase 4 (GÖREV 1) — see lib/pixel-store.tsx's postAction doc
+// comment; identical reasoning, routed through the same shared postJson().
 async function postAction<T>(action: string, payload: Record<string, unknown>): Promise<T> {
-  const res = await fetch(API_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...payload }),
-  });
-  const json = (await res.json().catch(() => ({}))) as { error?: string } & T;
-  if (!res.ok) {
-    throw new Error(json.error || `request failed (${res.status})`);
-  }
-  return json;
+  return postJson<T>(API_URL, { action, ...payload });
 }
 
 export function BoardProvider({ children }: { children: ReactNode }) {
@@ -65,7 +75,8 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   const [files, setFiles] = useState<BoardFile[]>([]);
   const [pixels, setPixels] = useState<Record<string, BoardPixel>>({});
   const [burnedFraction, setBurnedFraction] = useState(0);
-  const [txPhase, setTxPhase] = useState<"awaiting_signature" | "processing" | null>(null);
+  const [txPhase, setTxPhase] = useState<"creating_intent" | "awaiting_signature" | "processing" | null>(null);
+  const [activeIntent, setActiveIntent] = useState<ActiveIntent | null>(null);
   const hydrated = useRef(false);
 
   const fetchBoards = useCallback(async () => {
@@ -195,16 +206,26 @@ export function BoardProvider({ children }: { children: ReactNode }) {
       if (!current || (current.listingPriceSol === undefined && current.listingPricePixel98 === undefined)) {
         throw new Error("Not listed for sale");
       }
+      if (current.listingPriceSol === undefined) {
+        throw new Error("This listing is priced in $PIXEL98 — available after launch");
+      }
       try {
-        if (current.listingPriceSol === undefined) {
-          throw new Error("This listing is priced in $PIXEL98 — available after launch");
-        }
-        const signature = await sendTransfer(current.listingPriceSol, new PublicKey(current.owner));
-        const result = await postAction<{ pixel: BoardPixel }>("buy-listing", { actor, boardId, index, signature });
+        // SOL-98 Phase 3/4 (fixes P2-F1, GÖREV 1) — mirrors
+        // lib/pixel-store.tsx's buyListing exactly: reserve an intent
+        // (server re-reads the live sub-block listing itself) before the
+        // wallet signs, then pay using the server-returned price + seller.
+        setTxPhase("creating_intent");
+        const intent = await createPurchaseIntent({ actor, actionType: "buy-listing", boardId, index });
+        setActiveIntent({ intentId: intent.intentId, actionType: "buy-listing", expiresAt: intent.expiresAt });
+        const priceSol = intent.priceSol ?? current.listingPriceSol;
+
+        const signature = await sendTransfer(priceSol, new PublicKey(intent.sellerWallet));
+        const result = await postAction<{ pixel: BoardPixel }>("buy-listing", { actor, boardId, intentId: intent.intentId, signature });
         setPixels((prev) => ({ ...prev, [`${boardId}:${index}`]: result.pixel }));
         return result.pixel;
       } finally {
         setTxPhase(null);
+        setActiveIntent(null);
       }
     },
     [requireWallet, pixels, sendTransfer]
@@ -217,16 +238,22 @@ export function BoardProvider({ children }: { children: ReactNode }) {
       if (!current || (current.rentPriceSol === undefined && current.rentPricePixel98 === undefined)) {
         throw new Error("Not listed for rent");
       }
+      if (current.rentPriceSol === undefined) {
+        throw new Error("This listing is priced in $PIXEL98 — available after launch");
+      }
       try {
-        if (current.rentPriceSol === undefined) {
-          throw new Error("This listing is priced in $PIXEL98 — available after launch");
-        }
-        const signature = await sendTransfer(current.rentPriceSol * days, new PublicKey(current.owner));
-        const result = await postAction<{ pixel: BoardPixel }>("rent", { actor, boardId, index, days, signature });
+        setTxPhase("creating_intent");
+        const intent = await createPurchaseIntent({ actor, actionType: "rent", boardId, index, days });
+        setActiveIntent({ intentId: intent.intentId, actionType: "rent", expiresAt: intent.expiresAt });
+        const priceSol = intent.priceSol ?? current.rentPriceSol * days;
+
+        const signature = await sendTransfer(priceSol, new PublicKey(intent.sellerWallet));
+        const result = await postAction<{ pixel: BoardPixel }>("rent", { actor, boardId, intentId: intent.intentId, signature });
         setPixels((prev) => ({ ...prev, [`${boardId}:${index}`]: result.pixel }));
         return result.pixel;
       } finally {
         setTxPhase(null);
+        setActiveIntent(null);
       }
     },
     [requireWallet, pixels, sendTransfer]
@@ -238,25 +265,33 @@ export function BoardProvider({ children }: { children: ReactNode }) {
       const target = pixels[`${boardId}:${index}`];
       if (!target) throw new Error("Nothing to hijack there yet");
       const tokenLive = Boolean(PIXEL98_MINT);
-      const split = splitHijackBurn(hijackCostInTokens(burnedFraction));
 
       try {
         if (tokenLive) {
+          // SOL-98 Phase 3/4 (fixes P2-F1, GÖREV 1/3) — mirrors
+          // lib/pixel-store.tsx's hijackPixel exactly.
+          setTxPhase("creating_intent");
+          const intent = await createPurchaseIntent({ actor, actionType: "hijack", boardId, index });
+          setActiveIntent({ intentId: intent.intentId, actionType: "hijack", expiresAt: intent.expiresAt });
+          const burnedTokens = intent.burnedTokensPreview ?? 0;
+          const ownerTokens = intent.ownerTokensPreview ?? 0;
+
           setTxPhase("awaiting_signature");
           const outcome = await hijackBurn(
-            { owner: target.owner, burnTokens: split.burnedTokens, transferTokens: split.ownerTokens },
+            { owner: intent.sellerWallet, burnTokens: burnedTokens, transferTokens: ownerTokens },
             () => setTxPhase("processing")
           );
           const result = await postAction<{ pixel: BoardPixel; simulated: boolean }>("hijack", {
             actor,
             boardId,
-            index,
+            intentId: intent.intentId,
             signature: outcome.signature,
           });
           setPixels((prev) => ({ ...prev, [`${boardId}:${index}`]: result.pixel }));
           return result;
         }
 
+        setTxPhase("awaiting_signature");
         const auth = await signAuth("board-hijack", index);
         const result = await postAction<{ pixel: BoardPixel; simulated: boolean }>("hijack", {
           actor,
@@ -268,9 +303,10 @@ export function BoardProvider({ children }: { children: ReactNode }) {
         return result;
       } finally {
         setTxPhase(null);
+        setActiveIntent(null);
       }
     },
-    [requireWallet, pixels, burnedFraction, hijackBurn, signAuth]
+    [requireWallet, pixels, hijackBurn, signAuth]
   );
 
   const value = useMemo<BoardContextValue>(
@@ -278,6 +314,10 @@ export function BoardProvider({ children }: { children: ReactNode }) {
       files,
       pixels,
       burnedFraction,
+      hijackCostTokens: hijackCostInTokens(burnedFraction),
+      hijackSplit: splitHijackBurn(hijackCostInTokens(burnedFraction)),
+      txPhase,
+      activeIntent,
       nextFilePriceSol: nextBoardFilePrice(files.length),
       buyBoard,
       renameBoard,
@@ -289,7 +329,22 @@ export function BoardProvider({ children }: { children: ReactNode }) {
       rentPixel,
       hijackPixel,
     }),
-    [files, pixels, burnedFraction, buyBoard, renameBoard, editPixel, listForSale, listForRent, unlist, buyListing, rentPixel, hijackPixel]
+    [
+      files,
+      pixels,
+      burnedFraction,
+      txPhase,
+      activeIntent,
+      buyBoard,
+      renameBoard,
+      editPixel,
+      listForSale,
+      listForRent,
+      unlist,
+      buyListing,
+      rentPixel,
+      hijackPixel,
+    ]
   );
 
   return <BoardContext.Provider value={value}>{children}</BoardContext.Provider>;

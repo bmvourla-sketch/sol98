@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 
 import {
   countBoardFiles,
-  createBoard,
   getBoardPixel,
   hijackBoardPixel,
   makeSubBlocks,
@@ -11,7 +10,7 @@ import {
   renameBoardFile,
   updateBoardPixel,
 } from "@/lib/server/board-db";
-import { claimSignature, releaseSignature } from "@/lib/server/used-signatures";
+import { claimSignature, releaseSignatureSafely } from "@/lib/server/used-signatures";
 import { verifyAuthProof } from "@/lib/server/verify-message";
 import {
   solRequiredLamportsWithTolerance,
@@ -23,6 +22,11 @@ import {
 import { getBurnedFraction } from "@/lib/server/token-stats";
 import { isRateLimited, requestIp } from "@/lib/server/rate-limit";
 import { createMutex } from "@/lib/server/mutex";
+import { recordOwnershipHistory } from "@/lib/server/ownership-history";
+import { logAudit } from "@/lib/server/audit-log";
+import { getIntent, type IntentActionType, type PurchaseIntent } from "@/lib/server/intent-db";
+import { updateBoardPixelOwnerAtomic } from "@/lib/server/board-mutations-atomic";
+import { insertBoardAtomic } from "@/lib/server/board-insert-atomic";
 import { HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
 import { PIXEL98_MINT, TREASURY_ADDRESS } from "@/lib/solana";
 import {
@@ -125,7 +129,9 @@ export async function POST(request: Request) {
         return fail(400, `unknown action "${action}"`);
     }
   } catch (error) {
-    return fail(500, error instanceof Error ? error.message : "request failed");
+    const message = error instanceof Error ? error.message : "request failed";
+    logAudit("db_failure", { where: "boards POST", action, error: message });
+    return fail(500, message);
   }
 }
 
@@ -141,13 +147,64 @@ async function handleRename(body: Record<string, unknown>, actor: string) {
   return NextResponse.json({ ok: true, file: result.file });
 }
 
+// ---------------------------------------------------------------------------
+// SOL-98 Phase 3 (MARKET SECURITY) — mirrors app/api/pixels/route.ts's
+// resolveIntent exactly (see that file's doc comment for the full P2-F1
+// rationale). Extending the fix here is an own-initiative scope decision:
+// while building the intent system it became clear boards/route.ts's
+// buy-listing / rent / live-hijack handlers have the IDENTICAL
+// transaction-substitution pattern as the main board did before this phase
+// — disclosed in full in docs/production-readiness/PHASE-3-MARKET-SECURITY.md.
+// ---------------------------------------------------------------------------
+async function resolveIntent(
+  body: Record<string, unknown>,
+  actor: string,
+  expectedActionType: IntentActionType
+): Promise<{ ok: true; intent: PurchaseIntent & { boardId: string } } | { ok: false; response: Response }> {
+  const intentId = body.intentId;
+  if (typeof intentId !== "string" || !intentId) {
+    return { ok: false, response: fail(400, "missing intentId — create one via POST /api/purchase-intents first") };
+  }
+  const intent = await getIntent(intentId);
+  if (!intent) return { ok: false, response: fail(404, "purchase intent not found") };
+  if (intent.actionType !== expectedActionType) {
+    return { ok: false, response: fail(400, "this intent was not created for this action") };
+  }
+  // The intent's OWN boardId is authoritative — which board.exe file this
+  // redeems is never taken from the request body, only from the server-
+  // issued intent record. (null means the intent was created for the main
+  // pixel board, which this route can't redeem.)
+  if (intent.boardId === null) {
+    return { ok: false, response: fail(400, "this intent is for the main pixel board — redeem it via POST /api/pixels") };
+  }
+  if (intent.buyerWallet !== actor) {
+    logAudit("authorization_failure", { action: expectedActionType, wallet: actor, reason: "intent belongs to a different wallet", intentId });
+    return { ok: false, response: fail(403, "this purchase intent belongs to a different wallet") };
+  }
+  if (intent.status !== "pending") {
+    return { ok: false, response: fail(409, `this intent is ${intent.status}, not pending`) };
+  }
+  if (intent.expiresAt <= Date.now()) {
+    return { ok: false, response: fail(410, "this purchase intent has expired — create a new one") };
+  }
+  // Defense in depth: POST /api/purchase-intents already refuses to create
+  // a self-targeting intent.
+  if (intent.buyerWallet === intent.sellerWallet) {
+    return { ok: false, response: fail(400, "you already own this spot") };
+  }
+  return { ok: true, intent: intent as PurchaseIntent & { boardId: string } };
+}
+
 function readAuth(body: Record<string, unknown>, action: string, index: number, actor: string) {
   const timestamp = body.authTimestamp;
   const signature = body.authSignature;
   if (typeof timestamp !== "number" || typeof signature !== "string" || !signature) {
+    logAudit("authorization_failure", { action, wallet: actor, reason: "missing auth proof" });
     return { ok: false as const, error: "missing auth proof" };
   }
-  return verifyAuthProof({ action, index, owner: actor, timestamp, signature });
+  const result = verifyAuthProof({ action, index, owner: actor, timestamp, signature });
+  if (!result.ok) logAudit("authorization_failure", { action, wallet: actor, reason: result.error });
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,21 +225,55 @@ async function handleBuyBoard(body: Record<string, unknown>, actor: string, ip: 
     const minLamports = solRequiredLamportsWithTolerance(priceSol);
 
     const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: TREASURY_ADDRESS, minLamports });
-    if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+    if (!verified.ok) {
+      logAudit("payment_verification_failed", { action: "buy-board", wallet: actor, reason: verified.error });
+      return fail(402, `payment not verified: ${verified.error}`);
+    }
+    logAudit("payment_verified", { action: "buy-board", wallet: actor });
 
     const firstUse = await claimSignature(signature);
-    if (!firstUse) return fail(409, "this transaction signature was already used");
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "buy-board", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
 
     const id = `b-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const now = Date.now();
     const file: BoardFile = { id, name, owner: actor, purchasedAt: now, priceSol };
+    const subBlocks = makeSubBlocks(id, actor, now);
 
-    const created = await createBoard(file, makeSubBlocks(id, actor, now));
+    // SOL-98 Phase 3 (own-initiative fix, same class as P2-F2 — see
+    // docs/production-readiness/PHASE-3-MARKET-SECURITY.md's disclosure
+    // section): boards/route.ts predates the Phase 2.1 fix, which only
+    // touched pixels/route.ts. A THROWN error here — a real DB/infra
+    // failure, not a clean creation conflict — must not permanently burn a
+    // signature that already paid the treasury.
+    // SOL-98 Phase 4 (fixes P2-F4 for the treasury paths — GÖREV 2): the
+    // board_files INSERT, the board_pixels sub-block INSERT, the
+    // payment_transactions INSERT, and the pixel_ownership_history INSERT
+    // now happen in ONE Postgres transaction (see
+    // lib/server/board-insert-atomic.ts) instead of createBoard()'s
+    // two-INSERT-plus-manual-compensating-DELETE sequence followed by two
+    // more separate best-effort ledger writes.
+    let created: Awaited<ReturnType<typeof insertBoardAtomic>>;
+    try {
+      created = await insertBoardAtomic({ file, subBlocks, signature, wallet: actor, action: "buy-board", amountSol: priceSol });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "buy-board", wallet: actor });
+      logAudit("db_failure", {
+        where: "insertBoardAtomic",
+        action: "buy-board",
+        wallet: actor,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (!created.ok) {
-      await releaseSignature(signature);
+      await releaseSignatureSafely(signature, { action: "buy-board", wallet: actor });
+      logAudit("ownership_conflict", { action: "buy-board", wallet: actor });
       return fail(409, "board creation conflict — please retry");
     }
-    return NextResponse.json({ ok: true, file });
+    return NextResponse.json({ ok: true, file: created.file });
   });
 }
 
@@ -277,53 +368,104 @@ async function handleUnlist(body: Record<string, unknown>, actor: string) {
 // ---------------------------------------------------------------------------
 async function handleBuyListing(body: Record<string, unknown>, actor: string, ip: string) {
   if (isRateLimited(`boards-buy:${ip}`, 20, 60_000)) return fail(429, "Too many purchase attempts — slow down.");
-  const boardId = parseBoardId(body.boardId);
-  if (!boardId) return fail(400, "missing or invalid boardId");
-  const index = body.index;
-  if (!isValidBoardIndex(index)) return fail(400, "invalid index");
+  const resolved = await resolveIntent(body, actor, "buy-listing");
+  if (!resolved.ok) return resolved.response;
+  const intent = resolved.intent;
+  const boardId = intent.boardId;
+  const index = intent.pixelIndex;
   const signature = body.signature;
   if (typeof signature !== "string" || !signature) return fail(400, "missing signature");
 
   return withWriteLock(async () => {
     const current = await getBoardPixel(boardId, index);
     if (!current) return fail(404, "spot not found");
+    if (current.owner !== intent.sellerWallet) {
+      return fail(409, "this listing changed since your intent was created — please create a new intent");
+    }
     if (current.listingPriceSol === undefined && current.listingPricePixel98 === undefined) {
       return fail(400, "spot is not listed for sale");
     }
-    if (current.owner === actor) return fail(400, "you already own this spot");
-    const seller = current.owner;
+    const seller = intent.sellerWallet;
+    const paidPixel98 = intent.currency === "PIXEL98";
 
-    if (current.listingPriceSol !== undefined) {
-      const minLamports = solRequiredLamportsWithTolerance(current.listingPriceSol);
+    if (!paidPixel98) {
+      const priceSol = intent.priceSol ?? 0;
+      if (current.listingPriceSol !== priceSol) {
+        return fail(409, "the listing price changed since your intent was created — please create a new intent");
+      }
+      const minLamports = solRequiredLamportsWithTolerance(priceSol);
       const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: seller, minLamports });
-      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+      if (!verified.ok) {
+        logAudit("payment_verification_failed", { action: "board-buy-listing", wallet: actor, reason: verified.error });
+        return fail(402, `payment not verified: ${verified.error}`);
+      }
     } else {
       if (!PIXEL98_MINT) return fail(503, "$PIXEL98 not live yet — this listing can't be paid until launch");
-      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, current.listingPricePixel98 ?? 0);
+      const pricePixel98 = intent.pricePixel98 ?? 0;
+      if (current.listingPricePixel98 !== pricePixel98) {
+        return fail(409, "the listing price changed since your intent was created — please create a new intent");
+      }
+      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, pricePixel98);
       const verified = await verifyTokenTransfer({ signature, fromOwner: actor, toOwner: seller, mint: PIXEL98_MINT, minRawAmount: minRaw });
-      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+      if (!verified.ok) {
+        logAudit("payment_verification_failed", { action: "board-buy-listing", wallet: actor, reason: verified.error });
+        return fail(402, `payment not verified: ${verified.error}`);
+      }
     }
+    logAudit("payment_verified", { action: "board-buy-listing", wallet: actor, boardId, index });
 
     const firstUse = await claimSignature(signature);
-    if (!firstUse) return fail(409, "this transaction signature was already used");
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "board-buy-listing", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
 
-    const result = await updateBoardPixel(boardId, index, seller, (existing) => ({
-      ...existing,
-      owner: actor,
-      destination: "",
-      imageUrl: "",
-      message: "",
-      neon: "none",
-      purchasedAt: Date.now(),
-      isRented: false,
-      listingPriceSol: undefined,
-      listingPricePixel98: undefined,
-      rentPriceSol: undefined,
-      rentPricePixel98: undefined,
-      valuationSol: existing.listingPriceSol ?? existing.valuationSol,
-    }));
+    let result: Awaited<ReturnType<typeof updateBoardPixelOwnerAtomic>>;
+    try {
+      result = await updateBoardPixelOwnerAtomic({
+        boardId,
+        index,
+        expectedOwner: seller,
+        mutate: (existing) => ({
+          ...existing,
+          owner: actor,
+          destination: "",
+          imageUrl: "",
+          message: "",
+          neon: "none",
+          purchasedAt: Date.now(),
+          isRented: false,
+          listingPriceSol: undefined,
+          listingPricePixel98: undefined,
+          rentPriceSol: undefined,
+          rentPricePixel98: undefined,
+          valuationSol: existing.listingPriceSol ?? existing.valuationSol,
+        }),
+        signature,
+        wallet: actor,
+        action: "board-buy-listing",
+        amountSol: paidPixel98 ? undefined : intent.priceSol,
+        mint: paidPixel98 ? PIXEL98_MINT : null,
+        intentId: intent.id,
+        prevOwner: seller,
+        newOwner: actor,
+        recordHistory: true,
+      });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "board-buy-listing", wallet: actor, boardId, index });
+      logAudit("db_failure", {
+        where: "updateBoardPixelOwnerAtomic",
+        action: "board-buy-listing",
+        wallet: actor,
+        boardId,
+        index,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (!result.ok) {
-      await releaseSignature(signature);
+      await releaseSignatureSafely(signature, { action: "board-buy-listing", wallet: actor, boardId, index });
+      logAudit("ownership_conflict", { action: "board-buy-listing", wallet: actor, boardId, index });
       return fail(409, "this listing changed before your purchase landed — your payment proof is still valid to retry");
     }
     return NextResponse.json({ ok: true, pixel: result.pixel });
@@ -332,50 +474,104 @@ async function handleBuyListing(body: Record<string, unknown>, actor: string, ip
 
 async function handleRent(body: Record<string, unknown>, actor: string, ip: string) {
   if (isRateLimited(`boards-buy:${ip}`, 20, 60_000)) return fail(429, "Too many purchase attempts — slow down.");
-  const boardId = parseBoardId(body.boardId);
-  if (!boardId) return fail(400, "missing or invalid boardId");
-  const index = body.index;
-  if (!isValidBoardIndex(index)) return fail(400, "invalid index");
-  const days = body.days;
-  if (typeof days !== "number" || !Number.isInteger(days) || days <= 0 || days > 365) {
-    return fail(400, "invalid days (1-365)");
-  }
+  const resolved = await resolveIntent(body, actor, "rent");
+  if (!resolved.ok) return resolved.response;
+  const intent = resolved.intent;
+  const boardId = intent.boardId;
+  const index = intent.pixelIndex;
+  const days = intent.rentDays ?? 0;
   const signature = body.signature;
   if (typeof signature !== "string" || !signature) return fail(400, "missing signature");
 
   return withWriteLock(async () => {
     const current = await getBoardPixel(boardId, index);
     if (!current) return fail(404, "spot not found");
+    if (current.owner !== intent.sellerWallet) {
+      return fail(409, "this listing changed since your intent was created — please create a new intent");
+    }
     if (current.rentPriceSol === undefined && current.rentPricePixel98 === undefined) {
       return fail(400, "spot is not listed for rent");
     }
-    if (current.owner === actor) return fail(400, "you already own this spot");
-    const owner = current.owner;
+    const owner = intent.sellerWallet;
+    const paidPixel98 = intent.currency === "PIXEL98";
 
-    if (current.rentPriceSol !== undefined) {
-      const minLamports = solRequiredLamportsWithTolerance(current.rentPriceSol * days);
+    if (!paidPixel98) {
+      if (current.rentPriceSol === undefined) {
+        return fail(409, "this spot is no longer listed for rent in SOL — please create a new intent");
+      }
+      const priceSol = intent.priceSol ?? 0;
+      if (current.rentPriceSol * days !== priceSol) {
+        return fail(409, "the rent price changed since your intent was created — please create a new intent");
+      }
+      const minLamports = solRequiredLamportsWithTolerance(priceSol);
       const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: owner, minLamports });
-      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+      if (!verified.ok) {
+        logAudit("payment_verification_failed", { action: "board-rent", wallet: actor, reason: verified.error });
+        return fail(402, `payment not verified: ${verified.error}`);
+      }
     } else {
       if (!PIXEL98_MINT) return fail(503, "$PIXEL98 not live yet — this listing can't be paid until launch");
-      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, (current.rentPricePixel98 ?? 0) * days);
+      if (current.rentPricePixel98 === undefined) {
+        return fail(409, "this spot is no longer listed for rent in $PIXEL98 — please create a new intent");
+      }
+      const pricePixel98 = intent.pricePixel98 ?? 0;
+      if (current.rentPricePixel98 * days !== pricePixel98) {
+        return fail(409, "the rent price changed since your intent was created — please create a new intent");
+      }
+      const minRaw = await tokenAmountToRaw(PIXEL98_MINT, pricePixel98);
       const verified = await verifyTokenTransfer({ signature, fromOwner: actor, toOwner: owner, mint: PIXEL98_MINT, minRawAmount: minRaw });
-      if (!verified.ok) return fail(402, `payment not verified: ${verified.error}`);
+      if (!verified.ok) {
+        logAudit("payment_verification_failed", { action: "board-rent", wallet: actor, reason: verified.error });
+        return fail(402, `payment not verified: ${verified.error}`);
+      }
     }
+    logAudit("payment_verified", { action: "board-rent", wallet: actor, boardId, index });
 
     const firstUse = await claimSignature(signature);
-    if (!firstUse) return fail(409, "this transaction signature was already used");
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "board-rent", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
 
-    const result = await updateBoardPixel(boardId, index, owner, (existing) => ({
-      ...existing,
-      isRented: true,
-      rentedTo: actor,
-      rentedUntil: Date.now() + days * 24 * 60 * 60 * 1000,
-      rentPriceSol: undefined,
-      rentPricePixel98: undefined,
-    }));
+    let result: Awaited<ReturnType<typeof updateBoardPixelOwnerAtomic>>;
+    try {
+      result = await updateBoardPixelOwnerAtomic({
+        boardId,
+        index,
+        expectedOwner: owner,
+        mutate: (existing) => ({
+          ...existing,
+          isRented: true,
+          rentedTo: actor,
+          rentedUntil: Date.now() + days * 24 * 60 * 60 * 1000,
+          rentPriceSol: undefined,
+          rentPricePixel98: undefined,
+        }),
+        signature,
+        wallet: actor,
+        action: "board-rent",
+        amountSol: paidPixel98 ? undefined : intent.priceSol,
+        mint: paidPixel98 ? PIXEL98_MINT : null,
+        intentId: intent.id,
+        prevOwner: owner,
+        newOwner: owner,
+        recordHistory: false,
+      });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "board-rent", wallet: actor, boardId, index });
+      logAudit("db_failure", {
+        where: "updateBoardPixelOwnerAtomic",
+        action: "board-rent",
+        wallet: actor,
+        boardId,
+        index,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     if (!result.ok) {
-      await releaseSignature(signature);
+      await releaseSignatureSafely(signature, { action: "board-rent", wallet: actor, boardId, index });
+      logAudit("ownership_conflict", { action: "board-rent", wallet: actor, boardId, index });
       return fail(409, "this listing changed before your rental landed — your payment proof is still valid to retry");
     }
     return NextResponse.json({ ok: true, pixel: result.pixel });
@@ -387,31 +583,44 @@ async function handleRent(body: Record<string, unknown>, actor: string, ip: stri
 // pre-launch = simulated (wallet-signed + rate-limited).
 // ---------------------------------------------------------------------------
 async function handleHijack(body: Record<string, unknown>, actor: string, ip: string) {
-  const boardId = parseBoardId(body.boardId);
-  if (!boardId) return fail(400, "missing or invalid boardId");
-  const index = body.index;
-  if (!isValidBoardIndex(index)) return fail(400, "invalid index");
-
-  const target = await getBoardPixel(boardId, index);
-  if (!target) return fail(404, "nothing to hijack there yet");
-  if (target.owner === actor) return fail(400, "you already own this spot");
-
-  const burnedFraction = await getBurnedFraction();
-  const hijackCost = hijackCostInTokens(burnedFraction);
-  const split = splitHijackBurn(hijackCost);
   const tokenLive = Boolean(PIXEL98_MINT);
 
+  // SOL-98 Phase 3 (fixes P2-F1 / GÖREV 2) — mirrors
+  // app/api/pixels/route.ts's handleHijack exactly: once $PIXEL98 is live a
+  // hijack spends a real verified burn, so it goes through the same
+  // purchase_intent system. The free pre-launch simulated path is
+  // unaffected — nothing is paid, so there's nothing to substitute.
   if (tokenLive) {
     if (isRateLimited(`boards-hijack:${ip}`, 20, 60_000)) return fail(429, "Too many hijack attempts — slow down.");
+    const resolved = await resolveIntent(body, actor, "hijack");
+    if (!resolved.ok) return resolved.response;
+    const intent = resolved.intent;
+    const boardId = intent.boardId;
+    const index = intent.pixelIndex;
     const signature = body.signature;
     if (typeof signature !== "string" || !signature) return fail(400, "missing hijack transaction signature");
 
     return withWriteLock(async () => {
+      const target = await getBoardPixel(boardId, index);
+      if (!target) return fail(404, "nothing to hijack there yet");
+      if (target.owner === actor) return fail(400, "you already own this spot");
+      if (target.owner !== intent.sellerWallet) {
+        return fail(409, "that spot changed hands since your intent was created — please create a new intent");
+      }
+
+      // Cost is ALWAYS recomputed fresh from the live burned fraction —
+      // never taken from the intent.
+      const burnedFraction = await getBurnedFraction();
+      const hijackCost = hijackCostInTokens(burnedFraction);
+      const split = splitHijackBurn(hijackCost);
       const burnRaw = await tokenAmountToRaw(PIXEL98_MINT, split.burnedTokens);
       const ownerRaw = await tokenAmountToRaw(PIXEL98_MINT, split.ownerTokens);
 
       const burnVerified = await verifyBurn({ signature, owner: actor, mint: PIXEL98_MINT, minRawAmount: burnRaw });
-      if (!burnVerified.ok) return fail(402, `burn not verified: ${burnVerified.error}`);
+      if (!burnVerified.ok) {
+        logAudit("payment_verification_failed", { action: "board-hijack", wallet: actor, reason: burnVerified.error });
+        return fail(402, `burn not verified: ${burnVerified.error}`);
+      }
 
       const transferVerified = await verifyTokenTransfer({
         signature,
@@ -420,14 +629,50 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
         mint: PIXEL98_MINT,
         minRawAmount: ownerRaw,
       });
-      if (!transferVerified.ok) return fail(402, `owner compensation not verified: ${transferVerified.error}`);
+      if (!transferVerified.ok) {
+        logAudit("payment_verification_failed", { action: "board-hijack", wallet: actor, reason: transferVerified.error });
+        return fail(402, `owner compensation not verified: ${transferVerified.error}`);
+      }
+      logAudit("payment_verified", { action: "board-hijack", wallet: actor, boardId, index });
 
       const firstUse = await claimSignature(signature);
-      if (!firstUse) return fail(409, "this hijack transaction signature was already used");
+      if (!firstUse) {
+        logAudit("duplicate_transaction_detected", { action: "board-hijack", wallet: actor, where: "used_signatures" });
+        return fail(409, "this hijack transaction signature was already used");
+      }
 
-      const result = await hijackBoardPixel(boardId, index, (current) => applyHijack(current, actor));
+      const prevOwner = target.owner;
+      let result: Awaited<ReturnType<typeof updateBoardPixelOwnerAtomic>>;
+      try {
+        result = await updateBoardPixelOwnerAtomic({
+          boardId,
+          index,
+          expectedOwner: prevOwner,
+          mutate: (current) => applyHijack(current, actor),
+          signature,
+          wallet: actor,
+          action: "board-hijack",
+          mint: PIXEL98_MINT,
+          intentId: intent.id,
+          prevOwner,
+          newOwner: actor,
+          recordHistory: true,
+        });
+      } catch (error) {
+        await releaseSignatureSafely(signature, { action: "board-hijack", wallet: actor, boardId, index });
+        logAudit("db_failure", {
+          where: "updateBoardPixelOwnerAtomic",
+          action: "board-hijack",
+          wallet: actor,
+          boardId,
+          index,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
       if (!result.ok) {
-        await releaseSignature(signature);
+        await releaseSignatureSafely(signature, { action: "board-hijack", wallet: actor, boardId, index });
+        logAudit("ownership_conflict", { action: "board-hijack", wallet: actor, boardId, index });
         return fail(409, "that spot changed hands before your hijack landed — please retry");
       }
       return NextResponse.json({
@@ -439,15 +684,33 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
     });
   }
 
-  // Simulated (pre-launch) — free, wallet-signed + rate-limited.
+  // Simulated (pre-launch) — free, wallet-signed + rate-limited. No
+  // purchase intent involved.
+  const boardId = parseBoardId(body.boardId);
+  if (!boardId) return fail(400, "missing or invalid boardId");
+  const index = body.index;
+  if (!isValidBoardIndex(index)) return fail(400, "invalid index");
+  const target = await getBoardPixel(boardId, index);
+  if (!target) return fail(404, "nothing to hijack there yet");
+  if (target.owner === actor) return fail(400, "you already own this spot");
+
+  const burnedFraction = await getBurnedFraction();
+  const hijackCost = hijackCostInTokens(burnedFraction);
+  const split = splitHijackBurn(hijackCost);
+
   if (isRateLimited(`boards-hijack-sim:${actor}`, 5, 10 * 60_000)) {
     return fail(429, "Too many simulated hijacks from this wallet — try again later.");
   }
   const authCheck = readAuth(body, "board-hijack", index, actor);
   if (!authCheck.ok) return fail(401, authCheck.error);
 
+  const prevOwnerSim = target.owner;
   const result = await hijackBoardPixel(boardId, index, (current) => applyHijack(current, actor));
-  if (!result.ok) return fail(409, "that spot changed hands — please retry");
+  if (!result.ok) {
+    logAudit("ownership_conflict", { action: "board-hijack-simulated", wallet: actor, boardId, index });
+    return fail(409, "that spot changed hands — please retry");
+  }
+  await recordOwnershipHistory({ pixelIndex: index, boardId, prevOwner: prevOwnerSim, newOwner: actor, action: "hijack" });
   return NextResponse.json({
     ok: true,
     pixel: result.pixel,

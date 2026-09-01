@@ -6,7 +6,7 @@ import { promises as fs } from "fs";
 import path from "path";
 
 import type { DocumentData } from "@/lib/document-types";
-import { isSupabaseConfigured, supabaseBaseUrl, supabaseHeaders } from "./supabase-env";
+import { isSupabaseConfigured, requireDurableStore, supabaseBaseUrl, supabaseHeaders } from "./supabase-env";
 import { createMutex } from "./mutex";
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -43,6 +43,7 @@ export async function readAllDocuments(): Promise<DocumentData[]> {
 }
 
 export async function createDocument(doc: DocumentData): Promise<DocumentData> {
+  requireDurableStore();
   if (isSupabaseConfigured()) {
     const res = await fetch(`${supabaseBaseUrl()}/rest/v1/${table()}`, {
       method: "POST",

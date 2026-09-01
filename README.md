@@ -43,7 +43,15 @@ npm run dev                  # http://localhost:3000
 | `NEXT_PUBLIC_TREASURY_ADDRESS` | Satın almaların düştüğü cüzdan adresi | **Evet** (canlı satış için) |
 | `NEXT_PUBLIC_PIXEL98_MINT` | $PIXEL98 mint adresi (Pump.fun sonrası) | Hayır (boş → hijack simüle, imza kanıtlı) |
 | `NEXT_PUBLIC_PIXELS_API_URL` | Merkezi board API ucu (default `/api/pixels`) | Hayır |
-| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | Kalıcı store (Vercel için) — pixels + documents + used-signatures | Hayır (yoksa dosya tabanlı) |
+| `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` | Kalıcı store (Vercel için) — pixels + board.exe + documents + used-signatures + ödeme/sahiplik audit trail | **Production'da EVET** (bkz. aşağıda "PRODUCTION'DA ZORUNLU") |
+
+> **PRODUCTION'DA ZORUNLU (Phase 1, 2026-09):** `NODE_ENV=production` iken
+> `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` eksikse, HER yazma (`buy`,
+> `buy-area`, `hijack`, `buy-listing`, `rent`, `buy-board`, `buy-document`,
+> `edit`, `list-*`, `unlist`, imza tüketimi) **fail-closed** olur — 500 döner,
+> **asla** `data/*.json`'a yazmaz (bkz. `lib/server/supabase-env.ts`
+> `requireDurableStore()`). Dosya tabanlı store artık SADECE dev/test'te
+> otomatik devreye girer. Detay: `docs/production-readiness/PHASE-1-DATABASE.md`.
 
 > `NEXT_PUBLIC_*` değişkenleri build sırasında gömülür — değiştirince **yeniden build** gerekir. `SOLANA_RPC_URL` client bundle'a hiç girmez.
 
@@ -85,9 +93,13 @@ lib/
     mutex.ts                   process-içi kilit (yazma yarışlarını engeller)
     rate-limit.ts               best-effort IP/actor bazlı hız sınırlama
     used-signatures.ts          replay koruması (bir imza sadece bir kez kabul edilir)
-    supabase-env.ts             paylaşılan Supabase/PostgREST config
-    pixel-db.ts / pixel-db-supabase.ts        board kalıcılığı (dosya veya Supabase)
+    supabase-env.ts             paylaşılan Supabase/PostgREST config + requireDurableStore() (Phase 1 fail-closed gate)
+    pixel-db.ts / pixel-db-supabase.ts        ana tahta kalıcılığı (dosya veya Supabase)
+    board-db.ts / board-db-supabase.ts        Start Ads kalıcılığı (dosya veya Supabase — Phase 1'de eklendi)
     document-db.ts                             doküman kalıcılığı (dosya veya Supabase)
+    payment-ledger.ts                           payment_transactions'a idempotent ödeme kaydı (Phase 1)
+    ownership-history.ts                        pixel_ownership_history'ye server-only sahiplik audit trail (Phase 1)
+    audit-log.ts                                 secret-free structured logging (Phase 1)
 components/
   desktop.tsx / taskbar.tsx / start-menu.tsx / window.tsx / desktop-icon.tsx
   solana-wallet-provider.tsx / solana-connect-button.tsx
@@ -154,43 +166,48 @@ tarafın imza kanıtı sunucuda serbest bırakılır (`releaseSignature`) ve ayn
 
 ## Merkezi board + doküman deposu (tüm kullanıcılar aynı veriyi görür)
 
-Varsayılan olarak `data/pixels.json`, `data/documents.json`,
-`data/used-signatures.json` dosyalarına yazar (tek makineli deploy:
-Render/Docker/VPS için yeterli). **Vercel** serverless'ta dosya sistemi
-kalıcı değildir — Supabase kullanın:
+**Production'da SADECE Supabase** (bkz. yukarıdaki "PRODUCTION'DA ZORUNLU").
+Dosya store (`data/pixels.json`, `data/boards.json`, `data/documents.json`,
+`data/used-signatures.json`) yalnızca `NODE_ENV=production` DEĞİLKEN (dev/test)
+otomatik devreye girer.
 
-1. Supabase'te üç tabloyu oluştur:
-   ```sql
-   create table public.pixels (
-     index bigint primary key,
-     data  jsonb not null
-   );
-   alter table public.pixels enable row level security;
-
-   create table public.documents (
-     id bigint generated always as identity primary key,
-     name text not null,
-     content text not null,
-     owner text not null,
-     "purchasedAt" bigint not null
-   );
-   alter table public.documents enable row level security;
-
-   create table public.used_signatures (
-     signature text primary key,
-     created_at timestamptz not null default now()
-   );
-   alter table public.used_signatures enable row level security;
-   ```
-2. Ortam değişkenlerini ayarla:
+1. Migration'ları uygula (`supabase/migrations/000{1,2,3}_*.up.sql`, sırayla —
+   Supabase MCP `apply_migration` ile veya `supabase db push` ile). Yedi
+   tablo oluşturur, hepsi RLS açık + policy yok (sadece service-role key
+   erişebilir, mevcut güvenlik modeliyle aynı):
+   - `pixels` (`index` PK, `data` jsonb) — ana tahta
+   - `documents` (`id` **text** PK — bkz. not aşağıda)
+   - `used_signatures` (`signature` PK) — replay koruması
+   - `board_files`, `board_pixels` (`board_id,index` composite PK) — Start Ads (**Phase 1'de eklendi**; önceden sadece dosya tabanlıydı, gerçek-para açığıydı)
+   - `payment_transactions` (`signature` UNIQUE) — idempotent ödeme audit
+   - `pixel_ownership_history` (`pixel_index,board_id,created_at` indexli) — server-only sahiplik audit trail
+2. Ortam değişkenlerini ayarla (server-only, asla `NEXT_PUBLIC_` değil):
    ```bash
    SUPABASE_URL=https://<proje>.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=<service_role_key>
-   # PIXELS_TABLE=pixels  DOCUMENTS_TABLE=documents  SIGNATURES_TABLE=used_signatures
+   SUPABASE_SERVICE_ROLE_KEY=<service_role_key veya yeni format sb_secret_...>
+   # PIXELS_TABLE / DOCUMENTS_TABLE / SIGNATURES_TABLE / BOARD_FILES_TABLE /
+   # BOARD_PIXELS_TABLE / PAYMENT_TRANSACTIONS_TABLE / OWNERSHIP_HISTORY_TABLE
+   # — hepsi opsiyonel, tablo adı değiştirmek istersen.
    ```
-   Bu ikisi set edildiğinde her üç adaptör otomatik devreye girer.
+   Bu ikisi set edildiğinde her adaptör otomatik devreye girer.
+3. Migration dry-run aracı ile mevcut `data/*.json`'ı staging'e taşımadan
+   ÖNCE ne olacağını gör (asla kör import yok):
+   ```bash
+   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... npm run migrate:dryrun
+   SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... npm run migrate:dryrun -- --apply   # sadece temiz dry-run sonrası
+   ```
 
-> Not: Supabase yolu credentials gerektirdiği için yerelde **test edilmemiştir** — yalnızca kod-hazır ve dokümante edilmiştir; PostgREST koşullu UPDATE deseni (`?index=eq.N&data->>owner=eq.X`) production'a almadan önce kendi projenizde bir kez doğrulanmalı.
+> **Doğrulandı (Phase 1, 2026-08-31):** Supabase yolu artık gerçek bir
+> staging projesinde (boş, production DEĞİL) test edilmiştir — PostgREST
+> koşullu UPDATE deseni (`?index=eq.N&data->>owner=eq.X`), aynı satıra
+> eşzamanlı yazma yarışı, idempotency, backup/restore drill'i ve yeni-format
+> `sb_secret_...` service key'in mevcut `apikey`+`Bearer` header desenine
+> drop-in uyumluluğu gerçek DB'ye karşı doğrulandı (bkz.
+> `docs/production-readiness/PHASE-1-DATABASE.md`). Ayrıca bu doğrulama
+> sırasında `documents.id`'nin dokümante edilen şemada yanlışlıkla
+> `bigint generated always as identity` olduğu (uygulama kendi string id'sini
+> üretiyor) bulundu ve `text primary key` olarak düzeltildi — üstteki şema
+> düzeltilmiş halidir.
 
 ## Deploy
 
@@ -200,6 +217,7 @@ kalıcı değildir — Supabase kullanın:
 ## Bilinen sınırlar
 
 - $PIXEL98 henüz mint edilmedi → hijack burn simüle (imza kanıtlı + hız sınırlı, ücretsiz by design).
-- Hız sınırlama ve process-içi mutex bellek-içidir: soğuk başlangıçta sıfırlanır, birden fazla serverless instance'a yayılmaz. Gerçek yük altında paylaşımlı bir store'a (Upstash Redis, Vercel KV) taşınmalı.
+- Hız sınırlama (`rate-limit.ts`) hâlâ bellek-içidir: soğuk başlangıçta sıfırlanır, birden fazla serverless instance'a yayılmaz. **Sahiplik/ödeme atomikliği artık buna dahil DEĞİL** — o, Postgres'in koşullu UPDATE'iyle DB seviyesinde sağlanıyor (bkz. Phase 1). Gerçek yük altında hız sınırlama ayrıca paylaşımlı bir store'a (Upstash Redis, Vercel KV) taşınmalı.
 - Airdrop yalnızca tahmin (`spots × 1000`); gerçek dağıtım token çıkışında yapılacak.
-- Aynı anda aynı spota yapılan iki gerçek hijack/buy denemesinde, kaybeden tarafın zincire giden ödemesi geri alınamaz (bkz. "Bilinen sınır" yukarıda) — tam atomiklik için özel bir on-chain program gerekir.
+- Aynı anda aynı spota yapılan iki gerçek hijack/buy denemesinde, kaybeden tarafın zincire giden ödemesi geri alınamaz (bkz. "Bilinen sınır" yukarıda) — tam atomiklik için özel bir on-chain program gerekir. (Bu, imza/işlem seviyesindeki bilinen sınırdır — DB seviyesindeki sahiplik yazması hâlâ tam atomik ve tutarlıdır.)
+- Migration dry-run aracı (`scripts/import-json-dryrun.mjs`) şu an `pixels.json` / `documents.json` / `used-signatures.json`'ı kapsıyor; `boards.json` (Start Ads) henüz kapsamıyor — Phase 1'de board_files/board_pixels şeması sıfırdan kuruldu, taşınacak eski `boards.json` verisi olan bir deploy'da bu betiğin genişletilmesi gerekir.

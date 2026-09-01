@@ -89,6 +89,43 @@ function signAuth(keypair: Keypair, action: string, index: number | number[], ti
   return { authTimestamp: timestamp, authSignature: bytesToBase64(signature) };
 }
 
+// SOL-98 Phase 3 (MARKET SECURITY) — buy-listing / rent / hijack(live) now
+// require a server-issued purchase_intent (see app/api/pixels/route.ts's
+// resolveIntent). Tests below that redeem one of these three actions must
+// first create an intent — this helper calls lib/server/intent-db.ts
+// directly (same pattern tests/integration/phase2-concurrency.test.ts uses
+// for pixel-db.ts) rather than going through POST /api/purchase-intents,
+// since these tests are about the REDEMPTION routes' trust wiring, not the
+// intent-creation route (that route has its own coverage — see
+// tests/phase3-market-security.test.ts).
+async function makeIntent(opts: {
+  actionType: "buy-listing" | "rent" | "hijack";
+  index: number;
+  buyer: Keypair;
+  seller: Keypair;
+  currency?: "SOL" | "PIXEL98";
+  priceSol?: number;
+  pricePixel98?: number;
+  mint?: string | null;
+  rentDays?: number;
+}) {
+  const { createIntent } = await import("../lib/server/intent-db");
+  const intent = await createIntent({
+    actionType: opts.actionType,
+    boardId: null,
+    pixelIndex: opts.index,
+    buyerWallet: opts.buyer.publicKey.toBase58(),
+    sellerWallet: opts.seller.publicKey.toBase58(),
+    currency: opts.currency ?? "SOL",
+    priceSol: opts.priceSol,
+    pricePixel98: opts.pricePixel98,
+    mint: opts.mint ?? null,
+    rentDays: opts.rentDays,
+    ttlMs: 15 * 60_000,
+  });
+  return intent.id;
+}
+
 const blankAd = { destination: "", imageUrl: "", message: "", neon: "none" };
 
 beforeEach(async () => {
@@ -258,27 +295,31 @@ describe("POST /api/pixels — hijack (pre-launch simulated vs post-launch real 
   });
 
   it("post-launch: requires a verified on-chain burn, not just a signature claim", async () => {
-    const route = await freshRoute({ pixel98Mint: Keypair.generate().publicKey.toBase58() });
+    const mint = Keypair.generate().publicKey.toBase58();
+    const route = await freshRoute({ pixel98Mint: mint });
     const owner = Keypair.generate();
     const hijacker = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 10, signature: "sig-own4", ad: blankAd }));
+    const intentId = await makeIntent({ actionType: "hijack", index: 10, buyer: hijacker, seller: owner, currency: "PIXEL98", mint });
 
     verifyBurnMock.mockResolvedValue({ ok: false, error: "no matching burn" });
     const res = await route.POST(
-      post({ action: "hijack", actor: hijacker.publicKey.toBase58(), index: 10, signature: "burn-sig" })
+      post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "burn-sig", intentId })
     );
     expect(res.status).toBe(402);
     expect((await res.json()).error).toMatch(/burn not verified/);
   });
 
   it("post-launch: a verified burn + owner-compensation transfer succeeds and transfers ownership", async () => {
-    const route = await freshRoute({ pixel98Mint: Keypair.generate().publicKey.toBase58() });
+    const mint = Keypair.generate().publicKey.toBase58();
+    const route = await freshRoute({ pixel98Mint: mint });
     const owner = Keypair.generate();
     const hijacker = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 11, signature: "sig-own5", ad: blankAd }));
+    const intentId = await makeIntent({ actionType: "hijack", index: 11, buyer: hijacker, seller: owner, currency: "PIXEL98", mint });
 
     const res = await route.POST(
-      post({ action: "hijack", actor: hijacker.publicKey.toBase58(), index: 11, signature: "burn-sig-ok" })
+      post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "burn-sig-ok", intentId })
     );
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -359,9 +400,10 @@ describe("POST /api/pixels — buy-listing / rent (peer-to-peer, pays the CURREN
     await route.POST(post({ action: "buy", actor: alice.publicKey.toBase58(), index: 30, signature: "sig-alice5", ad: blankAd }));
     const listAuth = signAuth(alice, "list-sale", 30);
     await route.POST(post({ action: "list-sale", actor: alice.publicKey.toBase58(), index: 30, price: 2, currency: "SOL", ...listAuth }));
+    const intentId = await makeIntent({ actionType: "buy-listing", index: 30, buyer: bob, seller: alice, priceSol: 2 });
 
     const res = await route.POST(
-      post({ action: "buy-listing", actor: bob.publicKey.toBase58(), index: 30, signature: "sig-p2p" })
+      post({ action: "buy-listing", actor: bob.publicKey.toBase58(), signature: "sig-p2p", intentId })
     );
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -371,14 +413,18 @@ describe("POST /api/pixels — buy-listing / rent (peer-to-peer, pays the CURREN
     );
   });
 
-  it("rejects buying your own listing", async () => {
+  it("rejects buying your own listing (self-targeting intents are refused at creation — see tests/phase3-market-security.test.ts)", async () => {
     const route = await freshRoute();
     const alice = Keypair.generate();
     await route.POST(post({ action: "buy", actor: alice.publicKey.toBase58(), index: 31, signature: "sig-a6", ad: blankAd }));
     const listAuth = signAuth(alice, "list-sale", 31);
     await route.POST(post({ action: "list-sale", actor: alice.publicKey.toBase58(), index: 31, price: 2, currency: "SOL", ...listAuth }));
+    // Direct-lib-call intent creation bypasses POST /api/purchase-intents'
+    // own self-purchase guard — this proves the REDEMPTION route also
+    // refuses it (defense in depth, see resolveIntent's trailing check).
+    const intentId = await makeIntent({ actionType: "buy-listing", index: 31, buyer: alice, seller: alice, priceSol: 2 });
 
-    const res = await route.POST(post({ action: "buy-listing", actor: alice.publicKey.toBase58(), index: 31, signature: "sig-self" }));
+    const res = await route.POST(post({ action: "buy-listing", actor: alice.publicKey.toBase58(), signature: "sig-self", intentId }));
     expect(res.status).toBe(400);
   });
 
@@ -391,8 +437,9 @@ describe("POST /api/pixels — buy-listing / rent (peer-to-peer, pays the CURREN
     await route.POST(
       post({ action: "list-sale", actor: alice.publicKey.toBase58(), index: 32, price: 5000, currency: "PIXEL98", ...listAuth })
     );
+    const intentId = await makeIntent({ actionType: "buy-listing", index: 32, buyer: bob, seller: alice, currency: "PIXEL98", pricePixel98: 5000 });
 
-    const res = await route.POST(post({ action: "buy-listing", actor: bob.publicKey.toBase58(), index: 32, signature: "sig-tok" }));
+    const res = await route.POST(post({ action: "buy-listing", actor: bob.publicKey.toBase58(), signature: "sig-tok", intentId }));
     expect(res.status).toBe(503);
   });
 
@@ -405,8 +452,9 @@ describe("POST /api/pixels — buy-listing / rent (peer-to-peer, pays the CURREN
     await route.POST(
       post({ action: "list-rent", actor: alice.publicKey.toBase58(), index: 33, pricePerDay: 0.05, currency: "SOL", ...rentAuth })
     );
+    const intentId = await makeIntent({ actionType: "rent", index: 33, buyer: bob, seller: alice, priceSol: 0.05 * 30, rentDays: 30 });
 
-    const res = await route.POST(post({ action: "rent", actor: bob.publicKey.toBase58(), index: 33, days: 30, signature: "sig-rent" }));
+    const res = await route.POST(post({ action: "rent", actor: bob.publicKey.toBase58(), signature: "sig-rent", intentId }));
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.pixel.isRented).toBe(true);
