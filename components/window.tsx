@@ -112,18 +112,37 @@ export function Window({
         onDoubleClick={() => setMaximized((m) => !m)}
       >
         <span className="flex-1 truncate text-[12px]">{title}</span>
-        <button type="button" className="win98-title-button" onClick={onMinimize} aria-label="Minimize">
+        <button
+          type="button"
+          className="win98-title-button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMinimize();
+          }}
+          aria-label="Minimize"
+        >
           <Minus size={8} strokeWidth={3} />
         </button>
         <button
           type="button"
           className="win98-title-button"
-          onClick={() => setMaximized((m) => !m)}
+          onClick={(e) => {
+            e.stopPropagation();
+            setMaximized((m) => !m);
+          }}
           aria-label="Maximize"
         >
           <Square size={8} strokeWidth={2} />
         </button>
-        <button type="button" className="win98-title-button" onClick={onClose} aria-label="Close">
+        <button
+          type="button"
+          className="win98-title-button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          aria-label="Close"
+        >
           <X size={9} strokeWidth={3} />
         </button>
       </div>

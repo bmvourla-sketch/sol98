@@ -5,6 +5,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 
 import { usePixels, type NeonTemplate } from "@/lib/pixel-store";
 import { isSafeLinkUrl } from "@/lib/pixel-types";
+import { Win98Alert } from "./win98-alert";
 
 const FONTS = ["Tahoma", "Courier New", "Impact", "Arial Black", "Comic Sans MS", "Georgia", "Verdana"];
 const TEXT_COLORS = ["#ffff00", "#ffffff", "#000000", "#ff0000", "#00ff00", "#0000ff", "#ff00ff", "#00ffff"];
@@ -49,6 +50,7 @@ export function BannerMaker() {
   const [target, setTarget] = useState("");
   const [status, setStatus] = useState("");
   const [frame, setFrame] = useState(0);
+  const [alert, setAlert] = useState<{ kind: "success" | "error"; title: string; message: string } | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -198,28 +200,42 @@ export function BannerMaker() {
   async function place() {
     const canvas = canvasRef.current;
     if (!target) {
-      setStatus("Pick a purchased area first.");
+      setAlert({
+        kind: "error",
+        title: "No Area Selected",
+        message: "Pick a purchased area first (below), then place your banner.",
+      });
       return;
     }
     if (!canvas) return;
     const destination = link.trim();
     if (!isSafeLinkUrl(destination)) {
-      setStatus("Link must be an http:// or https:// URL (or left empty).");
+      setAlert({
+        kind: "error",
+        title: "Invalid Link",
+        message: "Link must be an http:// or https:// URL (or left empty).",
+      });
       return;
     }
     let dataUrl: string;
     try {
       dataUrl = canvas.toDataURL("image/png");
     } catch {
-      setStatus("Could not export (external image needs CORS).");
+      setAlert({ kind: "error", title: "Export Failed", message: "Could not export (external image needs CORS)." });
       return;
     }
     setStatus("Confirm in wallet…");
     try {
       await editArea(target, { imageUrl: dataUrl, destination, message: text.trim() });
-      setStatus("Banner placed on your area.");
+      setStatus("");
+      setAlert({ kind: "success", title: "Placed", message: "Banner placed on your area." });
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not place banner.");
+      setStatus("");
+      setAlert({
+        kind: "error",
+        title: "Placement Failed",
+        message: error instanceof Error ? error.message : "Could not place banner.",
+      });
     }
   }
 
@@ -298,9 +314,20 @@ export function BannerMaker() {
       {/* Actions */}
       <div className="flex gap-2">
         <button type="button" className="win98-button flex-1" onClick={download}>Download PNG</button>
-        <button type="button" className="win98-button flex-1" onClick={place}>Place on area</button>
+        <button type="button" className="win98-button flex-1" onClick={place} disabled={!target} title={!target ? "Pick a purchased area first" : undefined}>
+          Place on area
+        </button>
       </div>
       {status && <div className="text-[11px] text-[#000080]">{status}</div>}
+
+      {alert && (
+        <Win98Alert
+          kind={alert.kind}
+          title={alert.title}
+          message={alert.message}
+          onOk={() => setAlert(null)}
+        />
+      )}
     </div>
   );
 }

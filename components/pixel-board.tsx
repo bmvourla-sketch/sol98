@@ -130,6 +130,30 @@ export function PixelBoard({
     setSel(null);
   }, []);
 
+  // A drag that starts on the board (mousedown on a cell) but is released
+  // somewhere the local onMouseUp below never sees — over a floating Window,
+  // the Start Menu, or outside the browser entirely — used to leave
+  // `draggingRef`/`sel` dangling. The *next*, unrelated mouseup that later
+  // bubbled through the board would then finalize that stale rectangle,
+  // which is what made window-close clicks and Start Menu clicks appear to
+  // "leak through" into an unintended pixel selection/purchase. Listening on
+  // `window` catches every release no matter where it lands: finalize only
+  // if it actually landed back on the board, otherwise cancel the drag.
+  useEffect(() => {
+    function onGlobalMouseUp(e: MouseEvent) {
+      if (!draggingRef.current) return;
+      const target = e.target as Node | null;
+      const releasedOnBoard = !!(target && scrollRef.current?.contains(target));
+      if (releasedOnBoard) {
+        finalizeSelection();
+      } else {
+        cancelSelection();
+      }
+    }
+    window.addEventListener("mouseup", onGlobalMouseUp);
+    return () => window.removeEventListener("mouseup", onGlobalMouseUp);
+  }, [finalizeSelection, cancelSelection]);
+
   // Attach wheel + touch listeners with `passive: false` (React attaches these
   // passively, which would make preventDefault a no-op — and we must stop the
   // page from scrolling/zoom the page while we zoom the board instead).

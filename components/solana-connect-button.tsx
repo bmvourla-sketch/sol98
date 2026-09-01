@@ -157,7 +157,7 @@ export function SolanaConnectButton() {
             $
           </span>
         )}
-        <span className="hidden sm:inline">
+        <span className="whitespace-nowrap">
           {connecting ? "Connecting…" : disconnecting ? "…" : label}
         </span>
         {!connected && <ChevronDown size={11} />}

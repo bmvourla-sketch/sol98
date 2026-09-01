@@ -3,12 +3,32 @@ import "./globals.css";
 
 import { SolanaWalletProvider } from "@/components/solana-wallet-provider";
 
+const SITE_URL = "https://sol98.toolsomniai.com";
+const TITLE = "SOL-98: The On-Chain Pixel Board";
+const DESCRIPTION =
+  "A Windows 98 style on-chain pixel board on Solana. 10,000 blocks, one mission.";
+
 export const metadata: Metadata = {
-  title: "SOL-98: The On-Chain Pixel Board",
-  description:
-    "A Windows 98 style on-chain pixel board on Solana. 10,000 blocks, one mission.",
+  metadataBase: new URL(SITE_URL),
+  title: TITLE,
+  description: DESCRIPTION,
   manifest: "/manifest.json",
   icons: { icon: "/icon.svg", apple: "/icon.svg" },
+  openGraph: {
+    title: TITLE,
+    description: DESCRIPTION,
+    url: SITE_URL,
+    siteName: "SOL-98",
+    type: "website",
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: TITLE }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: DESCRIPTION,
+    site: "@solwin98",
+    images: ["/og-image.png"],
+  },
 };
 
 export const viewport: Viewport = {

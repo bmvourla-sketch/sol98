@@ -24,7 +24,22 @@ export function StartMenu({ onOpen, onClose }: StartMenuProps) {
   const [adsOpen, setAdsOpen] = useState(false);
 
   return (
-    <div className="win98-menu absolute bottom-full left-1 z-[100] w-56 py-1">
+    <>
+      {/* Full-screen backdrop: catches the outside click that should just
+          dismiss the menu, so it doesn't also fall through and act on
+          whatever's underneath (the pixel canvas, a window, ...). `fixed`
+          so it covers the viewport regardless of where the taskbar sits in
+          the DOM, and it sits below the menu (z-90 < z-100) but above
+          everything else. */}
+      <div
+        className="fixed inset-0 z-[90]"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+        aria-hidden
+      />
+      <div className="win98-menu absolute bottom-full left-1 z-[100] w-56 py-1">
       <div className="win98-menu-item font-bold">
         <span className="flex h-6 w-6 items-center justify-center bg-[#000080] text-[10px] text-white">
           S98
@@ -66,6 +81,7 @@ export function StartMenu({ onOpen, onClose }: StartMenuProps) {
           {label}
         </button>
       ))}
-    </div>
+      </div>
+    </>
   );
 }
