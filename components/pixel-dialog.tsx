@@ -59,11 +59,12 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
     nextPriceSol,
     areaPriceFor,
     hijackCostFor,
-    hijackSplit,
+    hijackSplitFor,
     activeIntent,
     buyPixel,
     buyArea,
     hijackPixel,
+    buyAtValuation,
     editPixel,
     listForSale,
     unlist,
@@ -92,6 +93,7 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
         ? "manage"
         : "hijack";
   const hijackCost = pixel ? hijackCostFor(index) : 0;
+  const hijackSplit = pixel ? hijackSplitFor(index) : { burnedTokens: 0, ownerTokens: 0 };
   const busy = txStatus === "creating_intent" || txStatus === "awaiting_signature" || txStatus === "processing";
   const price = multi ? areaPriceFor(indices.length) : nextPriceSol;
 
@@ -184,6 +186,25 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
     }
   }
 
+  async function handleBuyAtValuation() {
+    if (!connected || !publicKey) {
+      setAlert({ kind: "error", title: "Wallet", message: "Connect your wallet first (top-right)." });
+      return;
+    }
+    setTxStatus("creating_intent");
+    try {
+      await buyAtValuation(index);
+      setTxStatus("success");
+      setAlert({
+        kind: "success",
+        title: "Purchased",
+        message: `Pixel #${index + 1} is now yours.\nValuation +10% applied.`,
+      });
+    } catch (error) {
+      showError("Purchase Failed", friendlyIntentError(error));
+    }
+  }
+
   async function handleEdit() {
     if (!validateAdInputs()) return;
     setTxStatus("awaiting_signature");
@@ -266,6 +287,9 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
             <div className="bevel-in flex flex-col gap-1 px-2 py-1 text-xs">
               <span>Owner: <b>{shortenAddress(pixel.owner, 6)}</b></span>
               <span>Valuation: <b>{formatSol(pixel.valuationSol)} SOL</b></span>
+              <span className="text-[#808080]">
+                Buy outright at valuation → +10% · Hijack (burn) → −5%
+              </span>
               <span>
                 {tokenLive ? "Burn required: " : "Would require: "}
                 <b>{hijackCost} {TOKEN_SYMBOL}</b>
@@ -273,7 +297,9 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
               <span className="text-[#808080]">
                 {hijackSplit.burnedTokens} burned forever · {hijackSplit.ownerTokens} to the owner
               </span>
-              <span className="text-[#808080]">Hijack → valuation −5%</span>
+              {activeIntent?.actionType === "buy-valuation" && (
+                <IntentCountdown expiresAt={activeIntent.expiresAt} />
+              )}
               {!tokenLive && (
                 <span className="text-[#800000]">
                   $PIXEL98 not live yet — this hijack is FREE and SIMULATED: wallet-signed proof of
@@ -341,21 +367,36 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
                 {txStatus === "awaiting_signature" ? "Confirm in wallet…" : txStatus === "processing" ? "Confirming…" : `Buy (${formatSol(price)} SOL)`}
               </button>
             )}
+            {mode === "hijack" && pixel && (
+              <button type="button" className="win98-button" onClick={handleBuyAtValuation} disabled={busy}>
+                {busy && activeIntent?.actionType === "buy-valuation"
+                  ? txStatus === "creating_intent"
+                    ? "Locking in current price…"
+                    : txStatus === "awaiting_signature"
+                      ? "Confirm in wallet…"
+                      : "Confirming…"
+                  : `Buy (${formatSol(pixel.valuationSol)} SOL)`}
+              </button>
+            )}
             {mode === "hijack" && (
               <button type="button" className="win98-button" onClick={handleHijack} disabled={busy}>
-                {txStatus === "creating_intent"
-                  ? "Locking in current price…"
-                  : txStatus === "awaiting_signature"
-                    ? tokenLive
-                      ? "Confirm burn…"
-                      : "Confirm signature…"
-                    : txStatus === "processing"
+                {busy && activeIntent?.actionType === "hijack"
+                  ? txStatus === "creating_intent"
+                    ? "Locking in current price…"
+                    : txStatus === "awaiting_signature"
                       ? tokenLive
-                        ? "Burning…"
-                        : "Hijacking…"
-                      : tokenLive
-                        ? `Hijack (${hijackCost})`
-                        : "Hijack (simulated, free)"}
+                        ? "Confirm burn…"
+                        : "Confirm signature…"
+                      : txStatus === "processing"
+                        ? tokenLive
+                          ? "Burning…"
+                          : "Hijacking…"
+                        : tokenLive
+                          ? `Hijack (${hijackCost})`
+                          : "Hijack (simulated, free)"
+                  : tokenLive
+                    ? `Hijack (${hijackCost})`
+                    : "Hijack (simulated, free)"}
               </button>
             )}
             {mode === "manage" && (

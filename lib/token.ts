@@ -13,6 +13,16 @@ export const AIRDROP_PER_SPOT = 1000;
 /** A hijack reduces the target spot's SOL valuation by 5%. */
 export const HIJACK_VALUATION_DECAY = 0.05;
 
+/**
+ * Hijack cost scales with the target's own valuation (see
+ * HIJACK_VALUATION_DECAY) relative to a board's base block price — capped so
+ * an extreme late-bonding-curve pixel doesn't require an unreasonable
+ * fraction of total supply to take over. A valuation at the cap or above
+ * costs the same as exactly the cap; it never costs MORE than this many
+ * times the tier's flat rate.
+ */
+export const HIJACK_VALUATION_RATIO_CAP = 20;
+
 /** Token launch trigger: the 100th sale. */
 export const LAUNCH_TARGET_SPOTS = 100;
 
@@ -62,11 +72,25 @@ export function hijackBurnRate(burnedFraction: number): number {
 }
 
 /**
- * Total $PIXEL98 tokens required to hijack at the current burn tier — a flat
- * percentage of supply (no longer tied to the target's SOL valuation).
+ * Total $PIXEL98 tokens required to hijack a specific spot: the global tier
+ * rate (see HIJACK_BURN_TIERS — cheaper as more supply is burned) SCALED by
+ * that spot's own current valuation relative to `referenceSol` (a board's
+ * base block price — see INITIAL_PRICE_SOL / BOARD_BLOCK_BASE_SOL).
+ *
+ * This is what makes HIJACK_VALUATION_DECAY a real economic effect and not
+ * just a displayed number: a spot ground down by repeated hijacks — or
+ * simply bought cheap early on a bonding curve — costs proportionally LESS
+ * to take over than a spot currently worth more than the base price; a spot
+ * worth more than the base price costs proportionally MORE. The ratio is
+ * capped (HIJACK_VALUATION_RATIO_CAP) so a spot far out on an exponential
+ * bonding curve doesn't require an unreasonable fraction of total supply,
+ * and floored at 1 token so a hijack is never free.
  */
-export function hijackCostInTokens(burnedFraction: number): number {
-  return Math.ceil(TOTAL_SUPPLY * hijackBurnRate(burnedFraction));
+export function hijackCostInTokens(burnedFraction: number, valuationSol: number, referenceSol: number): number {
+  const baseRate = hijackBurnRate(burnedFraction);
+  const rawRatio = referenceSol > 0 ? valuationSol / referenceSol : 1;
+  const ratio = Math.min(HIJACK_VALUATION_RATIO_CAP, Math.max(0, rawRatio));
+  return Math.max(1, Math.ceil(TOTAL_SUPPLY * baseRate * ratio));
 }
 
 /**

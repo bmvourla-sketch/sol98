@@ -27,7 +27,7 @@ export class ApiError extends Error {
   }
 }
 
-export type IntentActionType = "buy-listing" | "rent" | "hijack";
+export type IntentActionType = "buy-listing" | "rent" | "hijack" | "buy-valuation";
 
 export interface IntentResult {
   intentId: string;

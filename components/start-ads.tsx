@@ -219,7 +219,7 @@ function SubBlockDialog({
   pixel: BoardPixel | undefined;
   onClose: () => void;
 }) {
-  const { editPixel, listForSale, listForRent, unlist, buyListing, rentPixel, hijackPixel, hijackCostTokens, hijackSplit, activeIntent, txPhase } =
+  const { editPixel, listForSale, listForRent, unlist, buyListing, buyAtValuation, rentPixel, hijackPixel, hijackCostFor, hijackSplitFor, activeIntent, txPhase } =
     useBoards();
   const { publicKey, connected } = useWallet();
   const me = publicKey?.toBase58() ?? "";
@@ -234,6 +234,8 @@ function SubBlockDialog({
 
   const isOwner = pixel?.owner === me;
   const listed = pixel?.listingPriceSol !== undefined || pixel?.rentPriceSol !== undefined;
+  const hijackCostTokens = pixel ? hijackCostFor(boardId, index) : 0;
+  const hijackSplit = pixel ? hijackSplitFor(boardId, index) : { burnedTokens: 0, ownerTokens: 0 };
 
   function showErr(e: unknown) {
     // SOL-98 Phase 4 (GÖREV 1) — buyListing/rentPixel/hijackPixel now all
@@ -321,6 +323,20 @@ function SubBlockDialog({
                   continuously); it's recomputed fresh again right before the
                   wallet is asked to sign, so this is a live estimate, not a
                   stale/cached figure. */}
+              {pixel && (
+                <button
+                  type="button"
+                  className="win98-button"
+                  disabled={busy}
+                  onClick={() => run(() => buyAtValuation(boardId, index), "Purchased at valuation — valuation +10%.")}
+                >
+                  {busy && activeIntent?.actionType === "buy-valuation"
+                    ? txPhase === "creating_intent"
+                      ? "Locking price…"
+                      : "Confirm in wallet…"
+                    : `Buy at valuation — ${formatSol(pixel.valuationSol)} SOL`}
+                </button>
+              )}
               {isTokenLive() && (
                 <div className="text-[11px] text-[#808080]">
                   {busy ? "Locking in current price…" : `Est. cost: ${hijackCostTokens} ${TOKEN_SYMBOL}`}
@@ -366,9 +382,12 @@ function SubBlockDialog({
                     : `Rent 30d — ${formatSol(pixel.rentPriceSol)} SOL/day`}
                 </button>
               )}
-              {activeIntent && (activeIntent.actionType === "buy-listing" || activeIntent.actionType === "rent") && (
-                <IntentCountdown expiresAt={activeIntent.expiresAt} />
-              )}
+              {activeIntent &&
+                (activeIntent.actionType === "buy-listing" ||
+                  activeIntent.actionType === "rent" ||
+                  activeIntent.actionType === "buy-valuation") && (
+                  <IntentCountdown expiresAt={activeIntent.expiresAt} />
+                )}
               {pixel?.listingPricePixel98 !== undefined && <div className="text-[11px] text-[#808080]">Listed @ {pixel.listingPricePixel98} $PIXEL98 (after launch)</div>}
               {pixel?.rentPricePixel98 !== undefined && <div className="text-[11px] text-[#808080]">Rent {pixel.rentPricePixel98} $PIXEL98/day (after launch)</div>}
             </>

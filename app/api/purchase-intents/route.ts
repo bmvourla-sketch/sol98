@@ -9,8 +9,8 @@ import { isRateLimited, requestIp } from "@/lib/server/rate-limit";
 import { logAudit } from "@/lib/server/audit-log";
 import { hijackCostInTokens, splitHijackBurn } from "@/lib/token";
 import { PIXEL98_MINT } from "@/lib/solana";
-import { TOTAL_SPOTS } from "@/lib/pricing";
-import { BOARD_FILE_BLOCKS } from "@/lib/board-types";
+import { INITIAL_PRICE_SOL, TOTAL_SPOTS } from "@/lib/pricing";
+import { BOARD_BLOCK_BASE_SOL, BOARD_FILE_BLOCKS } from "@/lib/board-types";
 
 // SOL-98 Phase 3 (MARKET SECURITY) — GÖREV 1/2: the fix for finding P2-F1
 // (transaction substitution — see docs/production-readiness/
@@ -64,7 +64,7 @@ function isValidIndexFor(value: unknown, limit: number): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < limit;
 }
 
-const ACTION_TYPES: IntentActionType[] = ["buy-listing", "rent", "hijack"];
+const ACTION_TYPES: IntentActionType[] = ["buy-listing", "rent", "hijack", "buy-valuation"];
 
 export async function POST(request: Request) {
   const ip = requestIp(request);
@@ -187,6 +187,35 @@ export async function POST(request: Request) {
       });
     }
 
+    // buy-valuation — an always-available direct purchase of ANY owned spot
+    // at its current on-record valuationSol, no listing required. Unlike
+    // buy-listing, the PRICE itself is derived from live state (the spot's
+    // valuation), not from a value the owner set — so, like hijack, it's
+    // read fresh here and used to build the intent; it does NOT need to be
+    // re-validated against a client-submitted figure the way listing prices
+    // are, because there is no other source it could have come from.
+    if (actionType === "buy-valuation") {
+      const intent = await createIntent({
+        actionType: "buy-valuation",
+        boardId,
+        pixelIndex: index,
+        buyerWallet: actor,
+        sellerWallet: current.owner,
+        currency: "SOL",
+        priceSol: current.valuationSol,
+        ttlMs: INTENT_TTL_MS,
+      });
+      logAudit("intent_created", { actionType, wallet: actor, boardId, index, intentId: intent.id });
+      return NextResponse.json({
+        ok: true,
+        intentId: intent.id,
+        expiresAt: intent.expiresAt,
+        currency: "SOL",
+        price: intent.priceSol,
+        sellerWallet: intent.sellerWallet,
+      });
+    }
+
     // hijack — see the module doc comment: no price is locked into the
     // intent, only WHICH spot and WHO the (informational, re-verified fresh
     // at redemption) compensation recipient is.
@@ -194,7 +223,8 @@ export async function POST(request: Request) {
       return fail(503, "$PIXEL98 not live yet — hijack can't be paid until launch");
     }
     const burnedFraction = await getBurnedFraction();
-    const hijackCost = hijackCostInTokens(burnedFraction);
+    const referenceSol = boardId === null ? INITIAL_PRICE_SOL : BOARD_BLOCK_BASE_SOL;
+    const hijackCost = hijackCostInTokens(burnedFraction, current.valuationSol, referenceSol);
     const split = splitHijackBurn(hijackCost);
     const intent = await createIntent({
       actionType: "hijack",

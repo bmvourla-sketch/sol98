@@ -20,7 +20,7 @@ import { logAudit } from "@/lib/server/audit-log";
 import { getIntent, type IntentActionType, type PurchaseIntent } from "@/lib/server/intent-db";
 import { updatePixelOwnerAtomic } from "@/lib/server/pixel-mutations-atomic";
 import { insertPixelsAtomic } from "@/lib/server/pixel-insert-atomic";
-import { areaPrice, BOARD_SIZE, nextSpotPrice, TOTAL_SPOTS } from "@/lib/pricing";
+import { areaPrice, BOARD_SIZE, INITIAL_PRICE_SOL, nextSpotPrice, TOTAL_SPOTS } from "@/lib/pricing";
 import { HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
 import { PIXEL98_MINT, TREASURY_ADDRESS } from "@/lib/solana";
 import {
@@ -129,6 +129,8 @@ export async function POST(request: Request) {
         return await handleUnlist(body, actor);
       case "buy-listing":
         return await handleBuyListing(body, actor, ip);
+      case "buy-valuation":
+        return await handleBuyValuation(body, actor, ip);
       case "rent":
         return await handleRent(body, actor, ip);
       default:
@@ -431,11 +433,12 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
         return fail(409, "that spot changed hands since your intent was created — please create a new intent");
       }
 
-      // Cost is ALWAYS recomputed fresh from the live burned fraction —
-      // never taken from the intent (see app/api/purchase-intents/route.ts's
-      // doc comment on why hijack intents don't lock in a price).
+      // Cost is ALWAYS recomputed fresh from the live burned fraction AND
+      // the target's live valuation — never taken from the intent (see
+      // app/api/purchase-intents/route.ts's doc comment on why hijack
+      // intents don't lock in a price).
       const burnedFraction = await getBurnedFraction();
-      const hijackCost = hijackCostInTokens(burnedFraction);
+      const hijackCost = hijackCostInTokens(burnedFraction, target.valuationSol, INITIAL_PRICE_SOL);
       const split = splitHijackBurn(hijackCost);
       const burnRaw = await tokenAmountToRaw(PIXEL98_MINT, split.burnedTokens);
       const ownerRaw = await tokenAmountToRaw(PIXEL98_MINT, split.ownerTokens);
@@ -523,7 +526,7 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
   if (target.owner === actor) return fail(400, "you already own this spot");
 
   const burnedFraction = await getBurnedFraction();
-  const hijackCost = hijackCostInTokens(burnedFraction);
+  const hijackCost = hijackCostInTokens(burnedFraction, target.valuationSol, INITIAL_PRICE_SOL);
   const split = splitHijackBurn(hijackCost);
 
   if (isRateLimited(`pixels-hijack-sim:${actor}`, 5, 10 * 60_000)) {
@@ -797,6 +800,101 @@ async function handleBuyListing(body: Record<string, unknown>, actor: string, ip
       await releaseSignatureSafely(signature, { action: "buy-listing", wallet: actor, index });
       logAudit("ownership_conflict", { action: "buy-listing", wallet: actor, index });
       return fail(409, "this listing changed before your purchase landed — your payment proof is still valid to retry");
+    }
+    return NextResponse.json({ ok: true, pixel: result.pixel });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// buy-valuation — an always-available direct purchase of ANY owned pixel at
+// its current on-record valuationSol, in SOL, with no listing required from
+// the owner. Mirrors handleBuyListing's payment-verification + atomic-
+// mutation shape exactly; the two differences are (1) no "is this listed"
+// gate, and (2) on success the valuation is bumped +10% (this — together
+// with hijack's −5% HIJACK_VALUATION_DECAY — is the full buy/hijack cycle
+// the whitepaper describes: a spot's price rises 10% whenever it's bought,
+// and falls 5% whenever it's hijacked).
+// ---------------------------------------------------------------------------
+async function handleBuyValuation(body: Record<string, unknown>, actor: string, ip: string) {
+  if (isRateLimited(`pixels-buy:${ip}`, 20, 60_000)) return fail(429, "Too many purchase attempts — slow down.");
+  const resolved = await resolveIntent(body, actor, "buy-valuation");
+  if (!resolved.ok) return resolved.response;
+  const intent = resolved.intent;
+  const index = intent.pixelIndex;
+  const signature = body.signature;
+  if (typeof signature !== "string" || !signature) return fail(400, "missing signature");
+
+  return withWriteLock(async () => {
+    const current = await getPixel(index);
+    if (!current) return fail(404, "spot not found");
+    if (current.owner !== intent.sellerWallet) {
+      return fail(409, "this spot changed hands since your intent was created — please create a new intent");
+    }
+    const priceSol = intent.priceSol ?? 0;
+    if (current.valuationSol !== priceSol) {
+      return fail(409, "this spot's valuation changed since your intent was created — please create a new intent");
+    }
+    const seller = intent.sellerWallet;
+
+    const minLamports = solRequiredLamportsWithTolerance(priceSol);
+    const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: seller, minLamports });
+    if (!verified.ok) {
+      logAudit("payment_verification_failed", { action: "buy-valuation", wallet: actor, reason: verified.error });
+      return fail(402, `payment not verified: ${verified.error}`);
+    }
+    logAudit("payment_verified", { action: "buy-valuation", wallet: actor, index });
+
+    const firstUse = await claimSignature(signature);
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "buy-valuation", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
+
+    let result: Awaited<ReturnType<typeof updatePixelOwnerAtomic>>;
+    try {
+      result = await updatePixelOwnerAtomic({
+        index,
+        expectedOwner: seller,
+        mutate: (existing) => ({
+          ...existing,
+          owner: actor,
+          destination: "",
+          imageUrl: "",
+          message: "",
+          neon: "none",
+          purchasedAt: Date.now(),
+          isRented: false,
+          listingPriceSol: undefined,
+          listingPricePixel98: undefined,
+          rentPriceSol: undefined,
+          rentPricePixel98: undefined,
+          valuationSol: existing.valuationSol * 1.1,
+        }),
+        signature,
+        wallet: actor,
+        action: "buy-valuation",
+        amountSol: intent.priceSol,
+        mint: null,
+        intentId: intent.id,
+        prevOwner: seller,
+        newOwner: actor,
+        recordHistory: true,
+      });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "buy-valuation", wallet: actor, index });
+      logAudit("db_failure", {
+        where: "updatePixelOwnerAtomic",
+        action: "buy-valuation",
+        wallet: actor,
+        index,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    if (!result.ok) {
+      await releaseSignatureSafely(signature, { action: "buy-valuation", wallet: actor, index });
+      logAudit("ownership_conflict", { action: "buy-valuation", wallet: actor, index });
+      return fail(409, "this spot changed hands before your purchase landed — your payment proof is still valid to retry");
     }
     return NextResponse.json({ ok: true, pixel: result.pixel });
   });

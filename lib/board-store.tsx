@@ -17,7 +17,7 @@ import { useHijackBurn, useSendSolTransfer, useSignAuthMessage } from "./use-sol
 import { PIXEL98_MINT, getTreasuryPublicKey } from "./solana";
 import { hijackCostInTokens, splitHijackBurn } from "./token";
 import { createPurchaseIntent, postJson, type IntentActionType } from "./purchase-intent";
-import { nextBoardFilePrice, type BoardFile, type BoardPixel } from "./board-types";
+import { BOARD_BLOCK_BASE_SOL, boardPixelKey, nextBoardFilePrice, type BoardFile, type BoardPixel } from "./board-types";
 import type { AdContent } from "./pixel-types";
 
 export type { BoardFile, BoardPixel } from "./board-types";
@@ -34,13 +34,12 @@ interface BoardContextValue {
   files: BoardFile[];
   pixels: Record<string, BoardPixel>;
   burnedFraction: number;
-  /** Live (pre-click) hijack cost estimate — same shape/derivation as
-   * pixel-store.tsx's, driven off the polled `burnedFraction`. The
-   * authoritative figure used at wallet-confirmation time comes from the
-   * purchase intent's own preview (see GÖREV 3 in
-   * docs/production-readiness/PHASE-4-FRONTEND-TOKEN-PREP.md). */
-  hijackCostTokens: number;
-  hijackSplit: { burnedTokens: number; ownerTokens: number };
+  /** Hijack cost for a SPECIFIC sub-block — scales with its own valuation,
+   * mirrors lib/pixel-store.tsx's hijackCostFor. The authoritative figure
+   * used at wallet-confirmation time comes from the purchase intent's own
+   * preview (see GÖREV 3 in docs/production-readiness/PHASE-4-FRONTEND-TOKEN-PREP.md). */
+  hijackCostFor: (boardId: string, index: number) => number;
+  hijackSplitFor: (boardId: string, index: number) => { burnedTokens: number; ownerTokens: number };
   txPhase: "creating_intent" | "awaiting_signature" | "processing" | null;
   activeIntent: ActiveIntent | null;
   nextFilePriceSol: number;
@@ -51,6 +50,10 @@ interface BoardContextValue {
   listForRent: (boardId: string, index: number, pricePerDay: number, currency: ListingCurrency) => Promise<BoardPixel>;
   unlist: (boardId: string, index: number) => Promise<BoardPixel>;
   buyListing: (boardId: string, index: number) => Promise<BoardPixel>;
+  /** Always-available: pay the CURRENT owner the sub-block's live
+   * valuationSol directly, no listing required. Bumps valuationSol +10% on
+   * success — the buy half of the buy(+10%)/hijack(−5%) cycle. */
+  buyAtValuation: (boardId: string, index: number) => Promise<BoardPixel>;
   rentPixel: (boardId: string, index: number, days: number) => Promise<BoardPixel>;
   hijackPixel: (boardId: string, index: number) => Promise<{ pixel: BoardPixel; simulated: boolean }>;
 }
@@ -231,6 +234,30 @@ export function BoardProvider({ children }: { children: ReactNode }) {
     [requireWallet, pixels, sendTransfer]
   );
 
+  const buyAtValuation = useCallback(
+    async (boardId: string, index: number): Promise<BoardPixel> => {
+      const actor = requireWallet();
+      const current = pixels[boardPixelKey(boardId, index)];
+      if (!current) throw new Error("Nothing to buy there yet");
+      if (current.owner === actor) throw new Error("You already own this spot");
+      try {
+        setTxPhase("creating_intent");
+        const intent = await createPurchaseIntent({ actor, actionType: "buy-valuation", boardId, index });
+        setActiveIntent({ intentId: intent.intentId, actionType: "buy-valuation", expiresAt: intent.expiresAt });
+        const priceSol = intent.priceSol ?? current.valuationSol;
+
+        const signature = await sendTransfer(priceSol, new PublicKey(intent.sellerWallet));
+        const result = await postAction<{ pixel: BoardPixel }>("buy-valuation", { actor, boardId, intentId: intent.intentId, signature });
+        setPixels((prev) => ({ ...prev, [boardPixelKey(boardId, index)]: result.pixel }));
+        return result.pixel;
+      } finally {
+        setTxPhase(null);
+        setActiveIntent(null);
+      }
+    },
+    [requireWallet, pixels, sendTransfer]
+  );
+
   const rentPixel = useCallback(
     async (boardId: string, index: number, days: number): Promise<BoardPixel> => {
       const actor = requireWallet();
@@ -309,13 +336,25 @@ export function BoardProvider({ children }: { children: ReactNode }) {
     [requireWallet, pixels, hijackBurn, signAuth]
   );
 
+  const hijackCostFor = useCallback(
+    (boardId: string, index: number) => {
+      const target = pixels[boardPixelKey(boardId, index)];
+      return target ? hijackCostInTokens(burnedFraction, target.valuationSol, BOARD_BLOCK_BASE_SOL) : 0;
+    },
+    [pixels, burnedFraction]
+  );
+  const hijackSplitFor = useCallback(
+    (boardId: string, index: number) => splitHijackBurn(hijackCostFor(boardId, index)),
+    [hijackCostFor]
+  );
+
   const value = useMemo<BoardContextValue>(
     () => ({
       files,
       pixels,
       burnedFraction,
-      hijackCostTokens: hijackCostInTokens(burnedFraction),
-      hijackSplit: splitHijackBurn(hijackCostInTokens(burnedFraction)),
+      hijackCostFor,
+      hijackSplitFor,
       txPhase,
       activeIntent,
       nextFilePriceSol: nextBoardFilePrice(files.length),
@@ -326,6 +365,7 @@ export function BoardProvider({ children }: { children: ReactNode }) {
       listForRent,
       unlist,
       buyListing,
+      buyAtValuation,
       rentPixel,
       hijackPixel,
     }),
@@ -333,6 +373,8 @@ export function BoardProvider({ children }: { children: ReactNode }) {
       files,
       pixels,
       burnedFraction,
+      hijackCostFor,
+      hijackSplitFor,
       txPhase,
       activeIntent,
       buyBoard,
@@ -342,6 +384,7 @@ export function BoardProvider({ children }: { children: ReactNode }) {
       listForRent,
       unlist,
       buyListing,
+      buyAtValuation,
       rentPixel,
       hijackPixel,
     ]

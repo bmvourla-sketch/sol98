@@ -4,6 +4,7 @@ import {
   airdropFor,
   AIRDROP_PER_SPOT,
   HIJACK_VALUATION_DECAY,
+  HIJACK_VALUATION_RATIO_CAP,
   hijackBurnRate,
   hijackCostInTokens,
   LAUNCH_TARGET_SPOTS,
@@ -28,11 +29,32 @@ describe("$PIXEL98 token model", () => {
     expect(hijackBurnRate(1)).toBe(0.001);
   });
 
-  it("hijack cost = tier rate × total supply, ceiled", () => {
-    expect(hijackCostInTokens(0)).toBe(100_000); // 1% of 10M
-    expect(hijackCostInTokens(0.25)).toBe(50_000); // 0.5%
-    expect(hijackCostInTokens(0.5)).toBe(25_000); // 0.25%
-    expect(hijackCostInTokens(0.75)).toBe(10_000); // 0.10%
+  it("hijack cost = tier rate × total supply × valuation ratio, ceiled — ratio 1 (valuation == reference) matches the flat tier rate", () => {
+    expect(hijackCostInTokens(0, 0.2, 0.2)).toBe(100_000); // 1% of 10M
+    expect(hijackCostInTokens(0.25, 0.2, 0.2)).toBe(50_000); // 0.5%
+    expect(hijackCostInTokens(0.5, 0.2, 0.2)).toBe(25_000); // 0.25%
+    expect(hijackCostInTokens(0.75, 0.2, 0.2)).toBe(10_000); // 0.10%
+  });
+
+  it("hijack cost scales down with a decayed valuation, and down/up with valuation relative to the reference price", () => {
+    // A spot hijacked once (valuation × 0.95) costs proportionally less.
+    expect(hijackCostInTokens(0, 0.2 * 0.95, 0.2)).toBe(Math.ceil(100_000 * 0.95));
+    // Half the reference valuation → half the tier cost.
+    expect(hijackCostInTokens(0, 0.1, 0.2)).toBe(50_000);
+    // A spot worth MORE than the reference (e.g. bought later on the
+    // bonding curve) costs proportionally more — up to the cap.
+    expect(hijackCostInTokens(0, 0.4, 0.2)).toBe(200_000); // 2x
+  });
+
+  it("hijack cost ratio is capped so an extreme valuation doesn't require an unreasonable fraction of supply", () => {
+    const atCap = hijackCostInTokens(0, 0.2 * (HIJACK_VALUATION_RATIO_CAP + 10), 0.2);
+    const exactlyCap = hijackCostInTokens(0, 0.2 * HIJACK_VALUATION_RATIO_CAP, 0.2);
+    expect(atCap).toBe(exactlyCap);
+    expect(atCap).toBe(Math.ceil(100_000 * HIJACK_VALUATION_RATIO_CAP));
+  });
+
+  it("hijack cost is floored at 1 token — never free", () => {
+    expect(hijackCostInTokens(0.75, 0.0000001, 0.2)).toBeGreaterThanOrEqual(1);
   });
 
   it("splitHijackBurn is 50/50 (half burned forever, half to the owner)", () => {

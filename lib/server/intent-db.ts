@@ -29,7 +29,7 @@ import { isSupabaseConfigured, requireDurableStore } from "./supabase-env";
 import { createMutex } from "./mutex";
 import * as supabaseStore from "./intent-db-supabase";
 
-export type IntentActionType = "buy-listing" | "rent" | "hijack";
+export type IntentActionType = "buy-listing" | "rent" | "hijack" | "buy-valuation";
 export type IntentCurrency = "SOL" | "PIXEL98";
 export type IntentStatus = "pending" | "consumed" | "expired" | "cancelled";
 

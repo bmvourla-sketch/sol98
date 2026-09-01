@@ -30,6 +30,7 @@ import { insertBoardAtomic } from "@/lib/server/board-insert-atomic";
 import { HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
 import { PIXEL98_MINT, TREASURY_ADDRESS } from "@/lib/solana";
 import {
+  BOARD_BLOCK_BASE_SOL,
   BOARD_FILE_BLOCKS,
   nextBoardFilePrice,
   sanitizeBoardName,
@@ -119,6 +120,8 @@ export async function POST(request: Request) {
         return await handleUnlist(body, actor);
       case "buy-listing":
         return await handleBuyListing(body, actor, ip);
+      case "buy-valuation":
+        return await handleBuyValuation(body, actor, ip);
       case "rent":
         return await handleRent(body, actor, ip);
       case "hijack":
@@ -485,6 +488,101 @@ async function handleBuyListing(body: Record<string, unknown>, actor: string, ip
   });
 }
 
+// ---------------------------------------------------------------------------
+// buy-valuation — mirrors app/api/pixels/route.ts's handleBuyValuation
+// exactly, for a Start Ads sub-block: always-available direct purchase of
+// any owned sub-block at its current on-record valuationSol, no listing
+// required. On success the valuation is bumped +10% — the buy half of the
+// buy(+10%)/hijack(−5%) cycle.
+// ---------------------------------------------------------------------------
+async function handleBuyValuation(body: Record<string, unknown>, actor: string, ip: string) {
+  if (isRateLimited(`boards-buy:${ip}`, 20, 60_000)) return fail(429, "Too many purchase attempts — slow down.");
+  const resolved = await resolveIntent(body, actor, "buy-valuation");
+  if (!resolved.ok) return resolved.response;
+  const intent = resolved.intent;
+  const boardId = intent.boardId;
+  const index = intent.pixelIndex;
+  const signature = body.signature;
+  if (typeof signature !== "string" || !signature) return fail(400, "missing signature");
+
+  return withWriteLock(async () => {
+    const current = await getBoardPixel(boardId, index);
+    if (!current) return fail(404, "spot not found");
+    if (current.owner !== intent.sellerWallet) {
+      return fail(409, "this spot changed hands since your intent was created — please create a new intent");
+    }
+    const priceSol = intent.priceSol ?? 0;
+    if (current.valuationSol !== priceSol) {
+      return fail(409, "this spot's valuation changed since your intent was created — please create a new intent");
+    }
+    const seller = intent.sellerWallet;
+
+    const minLamports = solRequiredLamportsWithTolerance(priceSol);
+    const verified = await verifySolTransfer({ signature, fromOwner: actor, toOwner: seller, minLamports });
+    if (!verified.ok) {
+      logAudit("payment_verification_failed", { action: "board-buy-valuation", wallet: actor, reason: verified.error });
+      return fail(402, `payment not verified: ${verified.error}`);
+    }
+    logAudit("payment_verified", { action: "board-buy-valuation", wallet: actor, boardId, index });
+
+    const firstUse = await claimSignature(signature);
+    if (!firstUse) {
+      logAudit("duplicate_transaction_detected", { action: "board-buy-valuation", wallet: actor, where: "used_signatures" });
+      return fail(409, "this transaction signature was already used");
+    }
+
+    let result: Awaited<ReturnType<typeof updateBoardPixelOwnerAtomic>>;
+    try {
+      result = await updateBoardPixelOwnerAtomic({
+        boardId,
+        index,
+        expectedOwner: seller,
+        mutate: (existing) => ({
+          ...existing,
+          owner: actor,
+          destination: "",
+          imageUrl: "",
+          message: "",
+          neon: "none",
+          purchasedAt: Date.now(),
+          isRented: false,
+          listingPriceSol: undefined,
+          listingPricePixel98: undefined,
+          rentPriceSol: undefined,
+          rentPricePixel98: undefined,
+          valuationSol: existing.valuationSol * 1.1,
+        }),
+        signature,
+        wallet: actor,
+        action: "board-buy-valuation",
+        amountSol: intent.priceSol,
+        mint: null,
+        intentId: intent.id,
+        prevOwner: seller,
+        newOwner: actor,
+        recordHistory: true,
+      });
+    } catch (error) {
+      await releaseSignatureSafely(signature, { action: "board-buy-valuation", wallet: actor, boardId, index });
+      logAudit("db_failure", {
+        where: "updateBoardPixelOwnerAtomic",
+        action: "board-buy-valuation",
+        wallet: actor,
+        boardId,
+        index,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+    if (!result.ok) {
+      await releaseSignatureSafely(signature, { action: "board-buy-valuation", wallet: actor, boardId, index });
+      logAudit("ownership_conflict", { action: "board-buy-valuation", wallet: actor, boardId, index });
+      return fail(409, "this spot changed hands before your purchase landed — your payment proof is still valid to retry");
+    }
+    return NextResponse.json({ ok: true, pixel: result.pixel });
+  });
+}
+
 async function handleRent(body: Record<string, unknown>, actor: string, ip: string) {
   if (isRateLimited(`boards-buy:${ip}`, 20, 60_000)) return fail(429, "Too many purchase attempts — slow down.");
   const resolved = await resolveIntent(body, actor, "rent");
@@ -621,10 +719,10 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
         return fail(409, "that spot changed hands since your intent was created — please create a new intent");
       }
 
-      // Cost is ALWAYS recomputed fresh from the live burned fraction —
-      // never taken from the intent.
+      // Cost is ALWAYS recomputed fresh from the live burned fraction AND
+      // the target's live valuation — never taken from the intent.
       const burnedFraction = await getBurnedFraction();
-      const hijackCost = hijackCostInTokens(burnedFraction);
+      const hijackCost = hijackCostInTokens(burnedFraction, target.valuationSol, BOARD_BLOCK_BASE_SOL);
       const split = splitHijackBurn(hijackCost);
       const burnRaw = await tokenAmountToRaw(PIXEL98_MINT, split.burnedTokens);
       const ownerRaw = await tokenAmountToRaw(PIXEL98_MINT, split.ownerTokens);
@@ -708,7 +806,7 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
   if (target.owner === actor) return fail(400, "you already own this spot");
 
   const burnedFraction = await getBurnedFraction();
-  const hijackCost = hijackCostInTokens(burnedFraction);
+  const hijackCost = hijackCostInTokens(burnedFraction, target.valuationSol, BOARD_BLOCK_BASE_SOL);
   const split = splitHijackBurn(hijackCost);
 
   if (isRateLimited(`boards-hijack-sim:${actor}`, 5, 10 * 60_000)) {

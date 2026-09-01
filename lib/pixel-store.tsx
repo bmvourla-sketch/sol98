@@ -13,7 +13,7 @@ import {
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 
-import { areaPrice, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
+import { areaPrice, INITIAL_PRICE_SOL, nextSpotPrice, TOTAL_SPOTS, totalRaisedSol } from "./pricing";
 import { airdropFor, hijackCostInTokens, splitHijackBurn } from "./token";
 import { PIXEL98_MINT } from "./solana";
 import { useHijackBurn, useSendSolTransfer, useSignAuthMessage } from "./use-solana-tx";
@@ -54,9 +54,9 @@ interface PixelContextValue {
   areaPriceFor: (count: number) => number;
   /** Current hijack burn tier inputs (driven by cumulative burned supply). */
   burnedFraction: number;
-  hijackCostTokens: number;
-  hijackSplit: { burnedTokens: number; ownerTokens: number };
+  /** Hijack cost for a SPECIFIC spot — scales with its own valuation, see lib/token.ts. */
   hijackCostFor: (index: number) => number;
+  hijackSplitFor: (index: number) => { burnedTokens: number; ownerTokens: number };
 
   buyPixel: (index: number, ad: AdContent) => Promise<PixelData>;
   /** Buy a rectangular area of blocks as ONE banner (bigger area = bigger ad). */
@@ -69,6 +69,10 @@ interface PixelContextValue {
   listForSale: (index: number, price: number, currency: ListingCurrency) => Promise<PixelData>;
   /** Pays the CURRENT owner directly (peer-to-peer), then transfers ownership. */
   buyListing: (index: number) => Promise<PixelData>;
+  /** Always-available: pay the CURRENT owner the spot's live valuationSol
+   * directly, no listing required. Bumps valuationSol +10% on success —
+   * the buy half of the buy(+10%)/hijack(−5%) cycle. */
+  buyAtValuation: (index: number) => Promise<PixelData>;
   listForRent: (index: number, pricePerDay: number, currency: ListingCurrency) => Promise<PixelData>;
   /** Pays the CURRENT owner directly for `days`. */
   rentPixel: (index: number, days: number) => Promise<PixelData>;
@@ -420,6 +424,30 @@ export function PixelProvider({ children }: { children: ReactNode }) {
     [requireWallet, pixels, sendTransfer]
   );
 
+  const buyAtValuation = useCallback(
+    async (index: number): Promise<PixelData> => {
+      const actor = requireWallet();
+      const current = pixels[index];
+      if (!current) throw new Error("Nothing to buy there yet");
+      if (current.owner === actor) throw new Error("You already own this spot");
+      try {
+        setTxPhase("creating_intent");
+        const intent = await createPurchaseIntent({ actor, actionType: "buy-valuation", boardId: null, index });
+        setActiveIntent({ intentId: intent.intentId, actionType: "buy-valuation", expiresAt: intent.expiresAt });
+        const priceSol = intent.priceSol ?? current.valuationSol;
+
+        const signature = await sendTransfer(priceSol, new PublicKey(intent.sellerWallet));
+        const result = await postAction<{ pixel: PixelData }>("buy-valuation", { actor, intentId: intent.intentId, signature });
+        setPixels((prev) => ({ ...prev, [index]: result.pixel }));
+        return result.pixel;
+      } finally {
+        setTxPhase(null);
+        setActiveIntent(null);
+      }
+    },
+    [requireWallet, pixels, sendTransfer]
+  );
+
   const rentPixel = useCallback(
     async (index: number, days: number): Promise<PixelData> => {
       const actor = requireWallet();
@@ -471,8 +499,15 @@ export function PixelProvider({ children }: { children: ReactNode }) {
 
   const areaPriceFor = useCallback((count: number) => areaPrice(soldCount, count), [soldCount]);
   const hijackCostFor = useCallback(
-    (index: number) => (pixels[index] ? hijackCostInTokens(burnedFraction) : 0),
+    (index: number) => {
+      const target = pixels[index];
+      return target ? hijackCostInTokens(burnedFraction, target.valuationSol, INITIAL_PRICE_SOL) : 0;
+    },
     [pixels, burnedFraction]
+  );
+  const hijackSplitFor = useCallback(
+    (index: number) => splitHijackBurn(hijackCostFor(index)),
+    [hijackCostFor]
   );
 
   const value = useMemo<PixelContextValue>(
@@ -488,9 +523,8 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       activeIntent,
       areaPriceFor,
       burnedFraction,
-      hijackCostTokens: hijackCostInTokens(burnedFraction),
-      hijackSplit: splitHijackBurn(hijackCostInTokens(burnedFraction)),
       hijackCostFor,
+      hijackSplitFor,
       buyPixel,
       buyArea,
       hijackPixel,
@@ -498,6 +532,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       editArea,
       listForSale,
       buyListing,
+      buyAtValuation,
       listForRent,
       rentPixel,
       unlist,
@@ -515,6 +550,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       areaPriceFor,
       burnedFraction,
       hijackCostFor,
+      hijackSplitFor,
       buyPixel,
       buyArea,
       hijackPixel,
@@ -522,6 +558,7 @@ export function PixelProvider({ children }: { children: ReactNode }) {
       editArea,
       listForSale,
       buyListing,
+      buyAtValuation,
       listForRent,
       rentPixel,
       unlist,
