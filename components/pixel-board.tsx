@@ -7,12 +7,19 @@ import { usePixels } from "@/lib/pixel-store";
 import { BOARD_SIZE, formatSol, TOTAL_SPOTS } from "@/lib/pricing";
 import { LAUNCH_TARGET_SPOTS } from "@/lib/token";
 import { isSafeLinkUrl } from "@/lib/pixel-types";
-import { PixelCell } from "./pixel-cell";
+import { PixelCell, PIXEL_INDEX_ATTR } from "./pixel-cell";
 import { PixelDialog } from "./pixel-dialog";
 
 const BASE_CELL = 16; // px at zoom = 1
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 8;
+
+// SOL-98 — mobile/touch multi-select. Press and hold a block for this long
+// (with the finger staying within LONG_PRESS_CANCEL_PX of where it started)
+// to enter selection mode; moving further before that fires is treated as an
+// ordinary scroll instead, so the gesture never hijacks normal scrolling.
+const LONG_PRESS_MS = 350;
+const LONG_PRESS_CANCEL_PX = 10;
 
 function clampZoom(z: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
@@ -53,6 +60,13 @@ export function PixelBoard({
   const [sel, setSel] = useState<{ start: number; end: number } | null>(null);
   const [activeIndices, setActiveIndices] = useState<number[] | null>(null);
   const draggingRef = useRef(false);
+  const [touchCapable, setTouchCapable] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+    setTouchCapable(coarse || navigator.maxTouchPoints > 0 || "ontouchstart" in window);
+  }, []);
 
   // Zoom-to-point machinery.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -63,6 +77,58 @@ export function PixelBoard({
   useEffect(() => {
     zoomRef.current = zoom;
   }, [zoom]);
+
+  const onSelectStart = useCallback((index: number) => {
+    draggingRef.current = true;
+    setSel({ start: index, end: index });
+  }, []);
+
+  const onSelectMove = useCallback((index: number) => {
+    if (draggingRef.current) setSel((s) => (s ? { ...s, end: index } : s));
+  }, []);
+
+  const me = publicKey?.toBase58() ?? "";
+
+  // Mouse drag and touch long-press-drag both funnel into this: it's read by
+  // a native (non-React) touchend listener below, so it's kept stable and
+  // reads the latest sel/pixels/me off a ref instead of closing over them.
+  const latestRef = useRef({ sel, pixels, me });
+  useEffect(() => {
+    latestRef.current = { sel, pixels, me };
+  }, [sel, pixels, me]);
+
+  const finalizeSelection = useCallback(() => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    const { sel: currentSel, pixels: currentPixels, me: currentMe } = latestRef.current;
+    if (!currentSel) return;
+    const indices = rectIndices(currentSel.start, currentSel.end);
+    // Clicking/tapping a single owned ad with a link redirects to it (click-through).
+    if (indices.length === 1) {
+      const p = currentPixels[indices[0]];
+      // Re-validated here (not just on write) — defense in depth against
+      // any pixel written before this check existed.
+      if (p && p.destination && p.owner !== currentMe && isSafeLinkUrl(p.destination)) {
+        window.open(p.destination, "_blank", "noopener,noreferrer");
+        setSel(null);
+        return;
+      }
+    }
+    setActiveIndices(indices);
+    setSel(null);
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    finalizeSelection();
+  }, [finalizeSelection]);
+
+  // A gesture that gets interrupted (e.g. a second finger touches down mid
+  // long-press-drag) discards the in-progress rectangle instead of leaving a
+  // dangling half-made selection on screen.
+  const cancelSelection = useCallback(() => {
+    draggingRef.current = false;
+    setSel(null);
+  }, []);
 
   // Attach wheel + touch listeners with `passive: false` (React attaches these
   // passively, which would make preventDefault a no-op — and we must stop the
@@ -124,17 +190,122 @@ export function PixelBoard({
       if (e.touches.length < 2) pinchRef.current = null;
     }
 
+    // --- Mobile/touch multi-select: press and hold a block, then drag to
+    // extend a rectangle (the touch equivalent of the desktop mouse-drag
+    // area-select) — release to buy the area as one banner, same as mouse.
+    //
+    // Touch events don't retarget as the finger moves: touchmove/touchend
+    // keep firing on whatever element touchstart began on, unlike mouse
+    // where onMouseEnter naturally fires per-element during a drag. So the
+    // cell "under the finger" is found manually via elementFromPoint + the
+    // data-pixel-index attribute PixelCell renders, each time the finger
+    // moves — the touch analogue of onSelectMove's per-cell onMouseEnter.
+    //
+    // Nothing here is hijacked until a long-press is confirmed: a quick tap
+    // (touchstart+touchend with no real movement) is left alone, so it still
+    // falls through to the browser's normal synthesized mouse/click events
+    // that already open the single-pixel dialog today. And a finger that
+    // moves past LONG_PRESS_CANCEL_PX before the timer fires is treated as
+    // an ordinary scroll, not a selection attempt, and nothing is prevented.
+    let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+    let touchStartPoint: { x: number; y: number } | null = null;
+    let selectDragActive = false;
+
+    function clearLongPressTimer() {
+      if (longPressTimer !== null) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    }
+
+    function indexFromTouchPoint(clientX: number, clientY: number): number | null {
+      const hit = document.elementFromPoint(clientX, clientY);
+      const cellEl = hit instanceof Element ? hit.closest(`[${PIXEL_INDEX_ATTR}]`) : null;
+      const raw = cellEl?.getAttribute(PIXEL_INDEX_ATTR);
+      if (raw === null || raw === undefined) return null;
+      const idx = Number(raw);
+      return Number.isFinite(idx) ? idx : null;
+    }
+
+    function onTouchStartSelect(e: TouchEvent) {
+      clearLongPressTimer();
+      if (e.touches.length !== 1) {
+        // A second finger means this is a pinch-zoom gesture, not a selection.
+        if (selectDragActive) cancelSelection();
+        selectDragActive = false;
+        touchStartPoint = null;
+        return;
+      }
+      const t = e.touches[0];
+      touchStartPoint = { x: t.clientX, y: t.clientY };
+      const idx = indexFromTouchPoint(t.clientX, t.clientY);
+      if (idx === null) return;
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        selectDragActive = true;
+        onSelectStart(idx);
+        // Best-effort tactile confirmation that selection mode has started;
+        // unsupported on most desktops/iOS Safari, silently ignored there.
+        if (typeof navigator !== "undefined") navigator.vibrate?.(12);
+      }, LONG_PRESS_MS);
+    }
+
+    function onTouchMoveSelect(e: TouchEvent) {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      if (selectDragActive) {
+        e.preventDefault(); // take over the gesture from page scroll while dragging
+        const idx = indexFromTouchPoint(t.clientX, t.clientY);
+        if (idx !== null) onSelectMove(idx);
+        return;
+      }
+      if (longPressTimer !== null && touchStartPoint) {
+        const dx = t.clientX - touchStartPoint.x;
+        const dy = t.clientY - touchStartPoint.y;
+        if (Math.hypot(dx, dy) > LONG_PRESS_CANCEL_PX) clearLongPressTimer();
+      }
+    }
+
+    function onTouchEndSelect(e: TouchEvent) {
+      clearLongPressTimer();
+      if (selectDragActive) {
+        // Swallow the synthetic mouse/click events the browser would
+        // otherwise replay after this touch — finalizeSelection() below
+        // already does what that synthetic click would have triggered.
+        e.preventDefault();
+        selectDragActive = false;
+        finalizeSelection();
+      }
+      touchStartPoint = null;
+    }
+
+    function onTouchCancelSelect() {
+      clearLongPressTimer();
+      if (selectDragActive) cancelSelection();
+      selectDragActive = false;
+      touchStartPoint = null;
+    }
+
     node.addEventListener("wheel", onWheel, { passive: false });
     node.addEventListener("touchstart", onTouchStart, { passive: false });
     node.addEventListener("touchmove", onTouchMove, { passive: false });
     node.addEventListener("touchend", onTouchEnd);
+    node.addEventListener("touchstart", onTouchStartSelect, { passive: false });
+    node.addEventListener("touchmove", onTouchMoveSelect, { passive: false });
+    node.addEventListener("touchend", onTouchEndSelect, { passive: false });
+    node.addEventListener("touchcancel", onTouchCancelSelect);
     return () => {
       node.removeEventListener("wheel", onWheel);
       node.removeEventListener("touchstart", onTouchStart);
       node.removeEventListener("touchmove", onTouchMove);
       node.removeEventListener("touchend", onTouchEnd);
+      node.removeEventListener("touchstart", onTouchStartSelect);
+      node.removeEventListener("touchmove", onTouchMoveSelect);
+      node.removeEventListener("touchend", onTouchEndSelect);
+      node.removeEventListener("touchcancel", onTouchCancelSelect);
+      clearLongPressTimer();
     };
-  }, [onZoomChange]);
+  }, [onZoomChange, onSelectStart, onSelectMove, finalizeSelection, cancelSelection]);
 
   // After the grid re-renders at the new zoom, keep the anchored point still.
   useLayoutEffect(() => {
@@ -145,39 +316,6 @@ export function PixelBoard({
     el.scrollTop = anchor.ratioY * el.scrollHeight - anchor.offsetY;
     anchorRef.current = null;
   }, [zoom]);
-
-  const onSelectStart = useCallback((index: number) => {
-    draggingRef.current = true;
-    setSel({ start: index, end: index });
-  }, []);
-
-  const onSelectMove = useCallback((index: number) => {
-    if (draggingRef.current) setSel((s) => (s ? { ...s, end: index } : s));
-  }, []);
-
-  const me = publicKey?.toBase58() ?? "";
-
-  const handleMouseUp = useCallback(() => {
-    if (draggingRef.current) {
-      draggingRef.current = false;
-      if (sel) {
-        const indices = rectIndices(sel.start, sel.end);
-        // Clicking a single owned ad with a link redirects to it (click-through).
-        if (indices.length === 1) {
-          const p = pixels[indices[0]];
-          // Re-validated here (not just on write) — defense in depth against
-          // any pixel written before this check existed.
-          if (p && p.destination && p.owner !== me && isSafeLinkUrl(p.destination)) {
-            window.open(p.destination, "_blank", "noopener,noreferrer");
-            setSel(null);
-            return;
-          }
-        }
-        setActiveIndices(indices);
-        setSel(null);
-      }
-    }
-  }, [sel, pixels, me]);
 
   const cells = useMemo(() => {
     let minR = -1, maxR = -1, minC = -1, maxC = -1;
@@ -231,6 +369,11 @@ export function PixelBoard({
           </span>
           {selCount > 1 && (
             <span className="text-xs text-yellow-200">Selected: {selCount} blocks</span>
+          )}
+          {touchCapable && selCount <= 1 && (
+            <span className="text-[11px] text-white/70">
+              Tip: press &amp; hold a block, then drag to select an area — release to buy
+            </span>
           )}
           {!connected && <span className="text-[11px] text-yellow-200">Connect wallet to buy</span>}
         </div>

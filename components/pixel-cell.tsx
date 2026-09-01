@@ -13,6 +13,14 @@ interface PixelCellProps {
   onSelectMove: (index: number) => void;
 }
 
+// SOL-98 — mobile/touch multi-select (press-and-hold, then drag to extend a
+// rectangle). Touch events don't retarget on move the way mouse events do —
+// `touchmove`/`touchend` keep firing on the element `touchstart` began on,
+// no matter where the finger physically is — so PixelBoard hit-tests the
+// cell under the finger itself via `document.elementFromPoint(...)` plus
+// this data attribute, rather than relying on per-cell touch handlers.
+export const PIXEL_INDEX_ATTR = "data-pixel-index";
+
 const NEON_CLASS: Partial<Record<NeonTemplate, string>> = {
   "cyberpunk-pulse": "neon-cyberpunk-pulse",
   matrix: "neon-matrix",
@@ -61,6 +69,7 @@ export const PixelCell = memo(function PixelCell({
       type="button"
       className={`pixel-cell${pixel ? " owned" : ""}${neonClass ? ` ${neonClass}` : ""}`}
       style={style}
+      data-pixel-index={index}
       onMouseDown={(e) => {
         if (e.button === 0) onSelectStart(index);
       }}
