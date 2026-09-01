@@ -5,10 +5,10 @@ export const TOKEN_NAME = "Pixel98";
 export const TOKEN_SYMBOL = "$PIXEL98";
 
 /** Mock SOL → $PIXEL98 rate used to price market listings and airdrops. */
-export const PIXEL98_PER_SOL = 1000;
+export const PIXEL98_PER_SOL = 100_000;
 
 /** Mock airdrop allocation: $PIXEL98 granted per owned spot. */
-export const AIRDROP_PER_SPOT = 1000;
+export const AIRDROP_PER_SPOT = 100_000;
 
 /** A hijack reduces the target spot's SOL valuation by 5%. */
 export const HIJACK_VALUATION_DECAY = 0.05;
@@ -27,12 +27,15 @@ export const HIJACK_VALUATION_RATIO_CAP = 20;
 export const LAUNCH_TARGET_SPOTS = 100;
 
 /**
- * Total $PIXEL98 supply — matches the whitepaper (10,000,000 fixed) and the
- * airdrop model (1,000 per block × 10,000 blocks). Until the token is minted
- * this is a MOCK constant used to express hijack costs as a percentage of
- * supply; set it to the real minted supply at Pump.fun launch if it differs.
+ * Total $PIXEL98 supply — matches Pump.fun's standard self-serve launch
+ * mint (every Pump.fun token mints a fixed 1,000,000,000 supply; there is
+ * no way to launch a smaller custom supply through the standard flow) and
+ * the airdrop model (100,000 per block × 10,000 blocks). Until the token
+ * is minted this is a MOCK constant used to express hijack costs as a
+ * percentage of supply; it already matches the real mint Pump.fun will
+ * produce at launch.
  */
-export const TOTAL_SUPPLY = 10_000_000;
+export const TOTAL_SUPPLY = 1_000_000_000;
 
 /**
  * Hijack burn tiers. A hijack costs `rate` (a fraction of TOTAL_SUPPLY), and

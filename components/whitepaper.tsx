@@ -1,4 +1,4 @@
-const WHITEPAPER = `SOL-98 — README.TXT (WHITEPAPER)  v1.1
+const WHITEPAPER = `SOL-98 — README.TXT (WHITEPAPER)  v1.3
 ================================================================================
 
 EXECUTIVE SUMMARY
@@ -7,27 +7,68 @@ EXECUTIVE SUMMARY
     on-chain billboard on Solana. 1,000,000 pixels (a 1000×1000 canvas)
     are sold in 10×10 blocks (10,000 blocks) on a bonding curve that
     starts at 0.2 SOL per block. The board is a decentralized ad space
-    with a built-in attention game: anyone can burn $PIXEL98 to HIJACK a
-    block, and every hijack devalues the target by 5%. Ads are clickable
-    — a viewer who taps an ad is redirected to its destination link.
+    with a built-in attention game: every purchase — the first sale or
+    a later "Buy at Valuation" (section 7) — raises a block's valuation
+    10%, and anyone can burn $PIXEL98 to HIJACK a block, which devalues
+    it 5% and hands it to a new owner. Buy and hijack form a closed
+    cycle that repeats for every block, for as long as the board exists.
+    Ads are clickable — a viewer who taps an ad is redirected to its
+    destination link.
 
 ================================================================================
 
 1. TOKENOMICS  ($PIXEL98)
 
-    Total supply:   10,000,000 $PIXEL98 (fixed)
-    Launch:         Pump.fun (community fair launch, no pre-sale)
-    Allocation:     100% -> pixel block owners (airdrop)
+    Total supply:   1,000,000,000 $PIXEL98 (fixed)
+    Launch:         Pump.fun (standard self-serve launch, no pre-sale)
+    Allocation:     100% -> pixel block owners (airdrop), 0% team/dev
 
-    Allocation:
       +-----------------------------+----------+
       | Pixel block owners (airdrop)|  100.0%  |
       | Team / VCs / treasury       |    0.0%  |
       +-----------------------------+----------+
 
-    There is no team allocation and no pre-mine. Every token is
-    distributed to the people who bought the board. The token's
-    scarcity comes from the hijack burn (below).
+    1,000,000,000 is not a number SOL-98 chose — it is Pump.fun's fixed
+    mint for every standard token launch. Their self-serve flow has no
+    option to mint a smaller custom supply, so $PIXEL98 uses that same
+    1B figure to be deployable exactly as described in this document.
+
+    PUMP.FUN LAUNCH MECHANICS  (what actually happens at the 100th sale)
+
+      - Bonding curve seed: 30 SOL + ~1.073B virtual tokens, priced by
+        a constant-product curve (x*y=k). Price rises as real tokens
+        are bought off the curve.
+      - Of the 1,000,000,000 real supply: ~793.1M (79.31%) is sold
+        publicly on the curve; ~206.9M (20.69%) is reserved and
+        deposited into the post-graduation liquidity pool.
+      - Graduation: once the curve has raised ~85 real SOL (~$69,000
+        market cap at typical SOL prices), the token graduates off the
+        curve.
+      - Migration: the reserved tokens plus the raised SOL move into a
+        new PumpSwap pool (Pump.fun's own AMM, not Raydium). LP tokens
+        are burned automatically on migration — that liquidity can
+        never be pulled by anyone, including the SOL-98 team.
+      - Fees: 0 SOL to create the token; a one-time ~0.015 SOL
+        migration fee. Bonding-curve trading fee is 1.25% total (0.30%
+        to the creator, 0.95% to the protocol). Post-graduation,
+        PumpSwap fees taper with market cap, from 1.25% down to 0.30%
+        at the highest tier.
+      - No dev/creator token allocation exists in Pump.fun's contract:
+        every one of the 1,000,000,000 tokens is either sold publicly
+        on the curve or reserved for the LP — none are pre-mined to a
+        team wallet. The SOL-98 team's revenue is the 0.30% creator
+        trading fee, not a token grant.
+
+    NOTE: because the curve sale is public and permissionless, the 1B
+    mint isn't allocated directly to block owners at the protocol
+    level. The "100% -> pixel block owners" airdrop (section 9) is
+    executed by the SOL-98 team as a post-graduation distribution to
+    the wallets recorded as block owners at the 100th sale, funded
+    from curve buys / creator fee revenue — it is a SOL-98 commitment
+    layered on top of the standard launch, not a Pump.fun built-in.
+
+    There is no team pre-mine. The token's scarcity beyond the initial
+    mint comes from the hijack burn (below).
 
 ================================================================================
 
@@ -53,15 +94,25 @@ EXECUTIVE SUMMARY
     10×10 block). SOL-98 keeps the same 10×10 block structure with a
     0.2 SOL starting price per block.
 
+    NOTE: This N-indexed curve prices a block only for its FIRST sale
+    (still-unsold blocks from the original 10,000-block pool). Once a
+    block has been sold once, all further price changes happen
+    per-block through its own VALUATION (section 7) — independent of
+    the global sale counter N.
+
 ================================================================================
 
 3. THE 100TH SALE  (PUMP.FUN LAUNCH)
 
     When the 100th sale happens, the token launches:
 
-      1. The full 10,000,000 $PIXEL98 supply is minted on Pump.fun.
-      2. 100% is airdropped to block owners, proportional to blocks.
-      3. The liquidity pool opens on Pump.fun.
+      1. The full 1,000,000,000 $PIXEL98 supply is minted on Pump.fun
+         and public bonding-curve trading opens (see section 1).
+      2. The wallets holding blocks at that moment are snapshotted;
+         100% of the airdrop allocation is distributed to them,
+         proportional to blocks owned (section 9).
+      3. Once the curve graduates, the liquidity pool opens on
+         PumpSwap and its LP tokens are burned.
 
     A live countdown on the board tracks progress to the 100th sale.
 
@@ -94,14 +145,25 @@ EXECUTIVE SUMMARY
 
 6. PIXEL HIJACK  (BURN-TO-CONQUER)
 
-    An owned block can be overtaken by BURNING $PIXEL98 equal to a
-    percentage of TOTAL SUPPLY (10,000,000 fixed). The burn rate drops as
-    more of the supply is removed from circulation:
+    An owned block can be overtaken by BURNING $PIXEL98. The BASE cost is
+    a percentage of TOTAL SUPPLY (1,000,000,000 fixed), and that
+    percentage drops as more of the supply is removed from circulation:
 
-        cumulative burned < 25%   ->  1.00%  (100,000 $PIXEL98)
-        cumulative burned >= 25%  ->  0.50%  ( 50,000 $PIXEL98)
-        cumulative burned >= 50%  ->  0.25%  ( 25,000 $PIXEL98)
-        cumulative burned >= 75%  ->  0.10%  ( 10,000 $PIXEL98)
+        cumulative burned < 25%   ->  1.00%  (10,000,000 $PIXEL98 base)
+        cumulative burned >= 25%  ->  0.50%  ( 5,000,000 $PIXEL98 base)
+        cumulative burned >= 50%  ->  0.25%  ( 2,500,000 $PIXEL98 base)
+        cumulative burned >= 75%  ->  0.10%  ( 1,000,000 $PIXEL98 base)
+
+    That base cost then SCALES WITH THE TARGET'S LIVE VALUATION (section
+    7): a block worth more than the 0.2 SOL reference price costs
+    proportionally MORE $PIXEL98 to hijack, and a block whose valuation
+    has decayed costs proportionally LESS.
+
+        hijack_cost = base_cost * (valuation / 0.2 SOL)
+
+    The ratio is capped at 20x — so an extreme valuation never demands an
+    unreasonable share of supply — and the final cost is always floored
+    at 1 $PIXEL98: hijacking is never free.
 
     The hijack payment is split 50/50: half is burned forever and the
     other half is sent to the hijacked block's current owner (fair
@@ -112,11 +174,41 @@ EXECUTIVE SUMMARY
 
 ================================================================================
 
-7. PAYMENTS  (SOL + $PIXEL98)
+7. VALUATION & BUY-AT-VALUATION  (THE FULL CYCLE)
+
+    Every block carries a live VALUATION, denominated in SOL. It starts
+    at the price the block was first bought for, and moves only two
+    ways:
+
+        - a PURCHASE (the first sale, or a "Buy at Valuation" below)
+          raises it 10%           valuation_new = valuation * 1.10
+        - a successful HIJACK (section 6) lowers it 5%
+                                   valuation_new = valuation * 0.95
+
+    At any time, ANYONE can buy an owned block outright — no listing
+    required from the owner — through "Buy at Valuation": the buyer
+    pays the block's current valuation, in SOL, directly to its current
+    owner. The instant that purchase confirms, the valuation rises 10%,
+    exactly as it would from a fresh sale.
+
+    Example: a block is bought for 0.2000 SOL (valuation 0.2000 SOL).
+    A hijack follows: valuation falls to 0.1900 SOL (x0.95), and the
+    $PIXEL98 hijack cost for that attempt was itself priced off the
+    0.2000 SOL valuation that was live at the time. The next buyer pays
+    0.1900 SOL — not the original 0.2000 — and once that purchase
+    confirms, the valuation rises to 0.2090 SOL (x1.10). If it's
+    hijacked again, it falls to 0.19855 SOL, and so on: buy raises it
+    10%, hijack lowers it 5%, indefinitely, for every block on the
+    board.
+
+================================================================================
+
+8. PAYMENTS  (SOL + $PIXEL98)
 
     - SOL: a real SystemProgram.transfer to the treasury.
-    - $PIXEL98: listings can also be priced in $PIXEL98 (1 SOL = 1,000
-      $PIXEL98 reference rate); $PIXEL98 payments activate at launch.
+    - $PIXEL98: listings can also be priced in $PIXEL98 (1 SOL =
+      100,000 $PIXEL98 reference rate); $PIXEL98 payments activate at
+      launch.
 
     Ownership is tied to the buyer's wallet: a block is purchased with
     a real, wallet-signed SOL transfer (SystemProgram.transfer to the
@@ -124,14 +216,14 @@ EXECUTIVE SUMMARY
 
 ================================================================================
 
-8. AIRDROP RULES
+9. AIRDROP RULES
 
     At launch, tokens are airdropped to block owners proportional to
     block count:
 
         airdrop(owner) = (blocks_owned / blocks_sold) * total_supply
 
-    (reference estimate: 1,000 $PIXEL98 per block)
+    (reference estimate: 100,000 $PIXEL98 per block)
 
 ================================================================================
 

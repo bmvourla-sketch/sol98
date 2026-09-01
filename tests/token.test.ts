@@ -14,10 +14,10 @@ import {
 } from "../lib/token";
 
 describe("$PIXEL98 token model", () => {
-  it("total supply is 10M (matches airdrop of 1000 x 10k blocks)", () => {
-    expect(TOTAL_SUPPLY).toBe(10_000_000);
-    expect(AIRDROP_PER_SPOT).toBe(1000);
-    expect(PIXEL98_PER_SOL).toBe(1000);
+  it("total supply is 1B (matches Pump.fun's standard mint; airdrop = 100,000 x 10k blocks)", () => {
+    expect(TOTAL_SUPPLY).toBe(1_000_000_000);
+    expect(AIRDROP_PER_SPOT).toBe(100_000);
+    expect(PIXEL98_PER_SOL).toBe(100_000);
   });
 
   it("hijack burn rate drops as cumulative burned supply grows", () => {
@@ -30,27 +30,27 @@ describe("$PIXEL98 token model", () => {
   });
 
   it("hijack cost = tier rate × total supply × valuation ratio, ceiled — ratio 1 (valuation == reference) matches the flat tier rate", () => {
-    expect(hijackCostInTokens(0, 0.2, 0.2)).toBe(100_000); // 1% of 10M
-    expect(hijackCostInTokens(0.25, 0.2, 0.2)).toBe(50_000); // 0.5%
-    expect(hijackCostInTokens(0.5, 0.2, 0.2)).toBe(25_000); // 0.25%
-    expect(hijackCostInTokens(0.75, 0.2, 0.2)).toBe(10_000); // 0.10%
+    expect(hijackCostInTokens(0, 0.2, 0.2)).toBe(10_000_000); // 1% of 1B
+    expect(hijackCostInTokens(0.25, 0.2, 0.2)).toBe(5_000_000); // 0.5%
+    expect(hijackCostInTokens(0.5, 0.2, 0.2)).toBe(2_500_000); // 0.25%
+    expect(hijackCostInTokens(0.75, 0.2, 0.2)).toBe(1_000_000); // 0.10%
   });
 
   it("hijack cost scales down with a decayed valuation, and down/up with valuation relative to the reference price", () => {
     // A spot hijacked once (valuation × 0.95) costs proportionally less.
-    expect(hijackCostInTokens(0, 0.2 * 0.95, 0.2)).toBe(Math.ceil(100_000 * 0.95));
+    expect(hijackCostInTokens(0, 0.2 * 0.95, 0.2)).toBe(Math.ceil(10_000_000 * 0.95));
     // Half the reference valuation → half the tier cost.
-    expect(hijackCostInTokens(0, 0.1, 0.2)).toBe(50_000);
+    expect(hijackCostInTokens(0, 0.1, 0.2)).toBe(5_000_000);
     // A spot worth MORE than the reference (e.g. bought later on the
     // bonding curve) costs proportionally more — up to the cap.
-    expect(hijackCostInTokens(0, 0.4, 0.2)).toBe(200_000); // 2x
+    expect(hijackCostInTokens(0, 0.4, 0.2)).toBe(20_000_000); // 2x
   });
 
   it("hijack cost ratio is capped so an extreme valuation doesn't require an unreasonable fraction of supply", () => {
     const atCap = hijackCostInTokens(0, 0.2 * (HIJACK_VALUATION_RATIO_CAP + 10), 0.2);
     const exactlyCap = hijackCostInTokens(0, 0.2 * HIJACK_VALUATION_RATIO_CAP, 0.2);
     expect(atCap).toBe(exactlyCap);
-    expect(atCap).toBe(Math.ceil(100_000 * HIJACK_VALUATION_RATIO_CAP));
+    expect(atCap).toBe(Math.ceil(10_000_000 * HIJACK_VALUATION_RATIO_CAP));
   });
 
   it("hijack cost is floored at 1 token — never free", () => {
@@ -67,9 +67,9 @@ describe("$PIXEL98 token model", () => {
     expect(burnedTokens + ownerTokens).toBe(cost);
   });
 
-  it("airdrop = spots * 1000", () => {
+  it("airdrop = spots * 100,000", () => {
     expect(airdropFor(0)).toBe(0);
-    expect(airdropFor(3)).toBe(3000);
+    expect(airdropFor(3)).toBe(300_000);
   });
 
   it("launch target is the 100th sale", () => {
