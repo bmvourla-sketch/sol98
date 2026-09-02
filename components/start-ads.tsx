@@ -109,7 +109,7 @@ function BuyBoardDialog({ onClose }: { onClose: () => void }) {
         <div className="flex flex-col gap-2 p-3">
           <div className="bevel-in px-2 py-1 text-xs">
             Price: <b>{formatSol(nextFilePriceSol)} SOL</b>
-            <span className="text-[#808080]"> (+10% each sale)</span>
+            <span className="text-[#808080]"> (+5% each sale)</span>
           </div>
           <label className="text-xs" htmlFor="board-name">Board name</label>
           <input id="board-name" className="win98-field" value={name} onChange={(e) => setName(e.target.value)} placeholder="My Ad Board" />
@@ -236,6 +236,10 @@ function SubBlockDialog({
   const listed = pixel?.listingPriceSol !== undefined || pixel?.rentPriceSol !== undefined;
   const hijackCostTokens = pixel ? hijackCostFor(boardId, index) : 0;
   const hijackSplit = pixel ? hijackSplitFor(boardId, index) : { burnedTokens: 0, ownerTokens: 0 };
+  // Anti-harassment cooldown (see lib/token.ts HIJACK_COOLDOWN_MS) — mirrors
+  // components/pixel-dialog.tsx's identical logic for the main board.
+  const protectedForMin = Math.max(0, Math.ceil(((pixel?.protectedUntil ?? 0) - Date.now()) / 60_000));
+  const isHijackProtected = protectedForMin > 0;
 
   function showErr(e: unknown) {
     // SOL-98 Phase 4 (GÖREV 1) — buyListing/rentPixel/hijackPixel now all
@@ -337,24 +341,33 @@ function SubBlockDialog({
                     : `Buy at valuation — ${formatSol(pixel.valuationSol)} SOL`}
                 </button>
               )}
-              {isTokenLive() && (
-                <div className="text-[11px] text-[#808080]">
-                  {busy ? "Locking in current price…" : `Est. cost: ${hijackCostTokens} ${TOKEN_SYMBOL}`}
-                  {" "}({hijackSplit.burnedTokens} burned · {hijackSplit.ownerTokens} to owner)
+              {isHijackProtected ? (
+                <div className="text-[11px] text-[#000080]">
+                  Protected from hijacks for another {protectedForMin} min — recently bought or
+                  hijacked. Buy at valuation is still available.
                 </div>
+              ) : (
+                isTokenLive() && (
+                  <div className="text-[11px] text-[#808080]">
+                    {busy ? "Locking in current price…" : `Est. cost: ${hijackCostTokens} ${TOKEN_SYMBOL}`}
+                    {" "}({hijackSplit.burnedTokens} burned · {hijackSplit.ownerTokens} to owner)
+                  </div>
+                )
               )}
-              <button type="button" className="win98-button" disabled={busy} onClick={() => run(() => hijackPixel(boardId, index), "Hijacked — valuation −5%.")}>
-                {busy
-                  ? txPhase === "creating_intent"
-                    ? "Locking price…"
-                    : txPhase === "awaiting_signature"
-                      ? isTokenLive()
-                        ? "Confirm burn…"
-                        : "Confirm signature…"
-                      : "Hijacking…"
-                  : isTokenLive()
-                    ? "Hijack (burn)"
-                    : "Hijack (simulated, free)"}
+              <button type="button" className="win98-button" disabled={busy || isHijackProtected} onClick={() => run(() => hijackPixel(boardId, index), "Hijacked — valuation −5%.")}>
+                {isHijackProtected
+                  ? `Protected (${protectedForMin}m)`
+                  : busy
+                    ? txPhase === "creating_intent"
+                      ? "Locking price…"
+                      : txPhase === "awaiting_signature"
+                        ? isTokenLive()
+                          ? "Confirm burn…"
+                          : "Confirm signature…"
+                        : "Hijacking…"
+                    : isTokenLive()
+                      ? "Hijack (burn)"
+                      : "Hijack (simulated, free)"}
               </button>
               {isTokenLive() && activeIntent?.actionType === "hijack" && (
                 <IntentCountdown expiresAt={activeIntent.expiresAt} />

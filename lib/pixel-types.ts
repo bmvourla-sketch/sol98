@@ -25,6 +25,11 @@ export interface PixelData extends AdContent {
   owner: string; // wallet public key (base58)
   valuationSol: number; // current SOL valuation (decays on hijack)
   purchasedAt: number; // epoch ms
+  // Anti-harassment: hijacking this spot is rejected while
+  // Date.now() < protectedUntil. Set on every ownership change (first
+  // sale, Buy at Valuation, or a successful hijack) to HIJACK_COOLDOWN_MS
+  // from now — see lib/token.ts. Undefined/past means unprotected.
+  protectedUntil?: number;
   isRented: boolean;
   rentedTo?: string;
   rentedUntil?: number;

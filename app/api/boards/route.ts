@@ -27,7 +27,7 @@ import { logAudit } from "@/lib/server/audit-log";
 import { getIntent, type IntentActionType, type PurchaseIntent } from "@/lib/server/intent-db";
 import { updateBoardPixelOwnerAtomic } from "@/lib/server/board-mutations-atomic";
 import { insertBoardAtomic } from "@/lib/server/board-insert-atomic";
-import { HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
+import { HIJACK_COOLDOWN_MS, HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
 import { PIXEL98_MINT, TREASURY_ADDRESS } from "@/lib/solana";
 import {
   BOARD_BLOCK_BASE_SOL,
@@ -50,6 +50,14 @@ const withWriteLock = createMutex();
 
 function fail(status: number, error: string) {
   return NextResponse.json({ error }, { status });
+}
+
+// Anti-harassment cooldown — mirrors app/api/pixels/route.ts's identical
+// helper (see HIJACK_COOLDOWN_MS in lib/token.ts).
+function hijackProtectionError(protectedUntil: number | undefined): Response | null {
+  if (!protectedUntil || Date.now() >= protectedUntil) return null;
+  const mins = Math.max(1, Math.ceil((protectedUntil - Date.now()) / 60_000));
+  return fail(409, `this spot is protected from hijacks for another ${mins} min — it was recently bought or hijacked`);
 }
 
 function parsePubkey(value: unknown): PublicKey | null {
@@ -456,6 +464,7 @@ async function handleBuyListing(body: Record<string, unknown>, actor: string, ip
           rentPriceSol: undefined,
           rentPricePixel98: undefined,
           valuationSol: existing.listingPriceSol ?? existing.valuationSol,
+          protectedUntil: Date.now() + HIJACK_COOLDOWN_MS,
         }),
         signature,
         wallet: actor,
@@ -551,6 +560,7 @@ async function handleBuyValuation(body: Record<string, unknown>, actor: string, 
           rentPriceSol: undefined,
           rentPricePixel98: undefined,
           valuationSol: existing.valuationSol * 1.1,
+          protectedUntil: Date.now() + HIJACK_COOLDOWN_MS,
         }),
         signature,
         wallet: actor,
@@ -718,6 +728,8 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
       if (target.owner !== intent.sellerWallet) {
         return fail(409, "that spot changed hands since your intent was created — please create a new intent");
       }
+      const protectionError = hijackProtectionError(target.protectedUntil);
+      if (protectionError) return protectionError;
 
       // Cost is ALWAYS recomputed fresh from the live burned fraction AND
       // the target's live valuation — never taken from the intent.
@@ -804,6 +816,8 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
   const target = await getBoardPixel(boardId, index);
   if (!target) return fail(404, "nothing to hijack there yet");
   if (target.owner === actor) return fail(400, "you already own this spot");
+  const protectionError = hijackProtectionError(target.protectedUntil);
+  if (protectionError) return protectionError;
 
   const burnedFraction = await getBurnedFraction();
   const hijackCost = hijackCostInTokens(burnedFraction, target.valuationSol, BOARD_BLOCK_BASE_SOL);
@@ -840,6 +854,7 @@ function applyHijack(current: BoardPixel, newOwner: string): BoardPixel {
     message: "",
     neon: "none",
     purchasedAt: Date.now(),
+    protectedUntil: Date.now() + HIJACK_COOLDOWN_MS,
     isRented: false,
     rentedTo: undefined,
     rentedUntil: undefined,

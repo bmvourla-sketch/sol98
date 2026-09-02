@@ -21,6 +21,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildAuthMessage } from "../lib/auth-message";
 import { bytesToBase64 } from "../lib/bytes";
+import { HIJACK_COOLDOWN_MS } from "../lib/token";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 
@@ -97,6 +98,18 @@ function signAuth(keypair: Keypair, action: string, index: number | number[], ti
 }
 
 const blankAd = { destination: "", imageUrl: "", message: "", neon: "none" };
+
+// Anti-harassment hijack cooldown (see HIJACK_COOLDOWN_MS in lib/token.ts):
+// a spot bought through the route is protected from hijacks for 24h — and
+// POST /api/purchase-intents itself now refuses to create a hijack intent
+// against a still-protected spot. The test below buys its target and then
+// immediately requests a hijack intent for it, but is testing the intent's
+// PRICE PREVIEW, not the cooldown — so it jumps Date.now() forward past the
+// cooldown window first. Callers MUST restore the spy (nowSpy.mockRestore())
+// once done, since it isn't reset between tests automatically.
+function pastHijackCooldown() {
+  return vi.spyOn(Date, "now").mockReturnValue(Date.now() + HIJACK_COOLDOWN_MS + 60_000);
+}
 
 beforeEach(async () => {
   await rmForce(DATA_DIR);
@@ -178,7 +191,11 @@ describe("POST /api/purchase-intents — creation", () => {
     await pixels.POST(postPixels({ action: "buy", actor: alice.publicKey.toBase58(), index: 4, signature: "sig-a4", ad: blankAd }));
 
     getBurnedFractionMock.mockResolvedValue(0.1);
+    // Jump past the cooldown — this test is about the hijack cost preview
+    // math, not the cooldown itself.
+    const nowSpy = pastHijackCooldown();
     const res = await intents.POST(postIntents({ actor: hijacker.publicKey.toBase58(), actionType: "hijack", index: 4 }));
+    nowSpy.mockRestore();
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.hijackCostTokensPreview).toBeGreaterThan(0);

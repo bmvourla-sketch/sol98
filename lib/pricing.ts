@@ -1,12 +1,16 @@
 // SOL-98 bonding-curve pricing.
 //
 // 10,000 spots (100 x 100). Spot #1 costs 0.2 SOL. Every purchase raises the
-// price of the *next available* spot by 10%, so:
-//     price(N) = 0.2 * 1.10^(N-1)     (N is 1-indexed)
+// price of the *next available* spot by 5%, so:
+//     price(N) = 0.2 * 1.05^(N-1)     (N is 1-indexed)
+//
+// Was 10%/sale; lowered to 5% so the curve doesn't price out late buyers as
+// aggressively (the old curve put block #100 at 2,505 SOL — this one puts it
+// at ~25 SOL, still a steep climb but no longer absurd).
 export const BOARD_SIZE = 100;
 export const TOTAL_SPOTS = BOARD_SIZE * BOARD_SIZE; // 10,000
 export const INITIAL_PRICE_SOL = 0.2;
-export const PRICE_INCREASE = 0.1; // +10% per spot
+export const PRICE_INCREASE = 0.05; // +5% per spot
 
 /** Price of the Nth spot (1-indexed). */
 export function spotPrice(oneBasedIndex: number): number {
@@ -33,8 +37,8 @@ export function totalRaisedSol(soldCount: number): number {
 /**
  * Bulk (multi-block) purchases step the price up every `PRICE_STEP_EVERY`
  * blocks, so a huge area can't be bought entirely at the flat current price:
- * blocks 1-10 cost the current `nextSpotPrice`, blocks 11-20 cost +10%,
- * blocks 21-30 cost +20%, and so on.
+ * blocks 1-10 cost the current `nextSpotPrice`, blocks 11-20 cost +5%,
+ * blocks 21-30 cost +10%, and so on (PRICE_INCREASE per step).
  */
 export const PRICE_STEP_EVERY = 10;
 

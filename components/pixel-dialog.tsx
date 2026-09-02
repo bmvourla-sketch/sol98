@@ -94,6 +94,11 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
         : "hijack";
   const hijackCost = pixel ? hijackCostFor(index) : 0;
   const hijackSplit = pixel ? hijackSplitFor(index) : { burnedTokens: 0, ownerTokens: 0 };
+  // Anti-harassment cooldown (see lib/token.ts HIJACK_COOLDOWN_MS) — a
+  // recently-bought or recently-hijacked spot can't be hijacked again yet.
+  const protectedUntil = pixel?.protectedUntil ?? 0;
+  const protectedForMin = Math.max(0, Math.ceil((protectedUntil - Date.now()) / 60_000));
+  const isHijackProtected = protectedForMin > 0;
   const busy = txStatus === "creating_intent" || txStatus === "awaiting_signature" || txStatus === "processing";
   const price = multi ? areaPriceFor(indices.length) : nextPriceSol;
 
@@ -290,13 +295,22 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
               <span className="text-[#808080]">
                 Buy outright at valuation → +10% · Hijack (burn) → −5%
               </span>
-              <span>
-                {tokenLive ? "Burn required: " : "Would require: "}
-                <b>{hijackCost} {TOKEN_SYMBOL}</b>
-              </span>
-              <span className="text-[#808080]">
-                {hijackSplit.burnedTokens} burned forever · {hijackSplit.ownerTokens} to the owner
-              </span>
+              {isHijackProtected ? (
+                <span className="text-[#000080]">
+                  Protected from hijacks for another {protectedForMin} min — recently bought or
+                  hijacked. Buy at valuation is still available.
+                </span>
+              ) : (
+                <>
+                  <span>
+                    {tokenLive ? "Burn required: " : "Would require: "}
+                    <b>{hijackCost} {TOKEN_SYMBOL}</b>
+                  </span>
+                  <span className="text-[#808080]">
+                    {hijackSplit.burnedTokens} burned forever · {hijackSplit.ownerTokens} to the owner
+                  </span>
+                </>
+              )}
               {activeIntent?.actionType === "buy-valuation" && (
                 <IntentCountdown expiresAt={activeIntent.expiresAt} />
               )}
@@ -379,24 +393,26 @@ export function PixelDialog({ indices, onClose }: PixelDialogProps) {
               </button>
             )}
             {mode === "hijack" && (
-              <button type="button" className="win98-button" onClick={handleHijack} disabled={busy}>
-                {busy && activeIntent?.actionType === "hijack"
-                  ? txStatus === "creating_intent"
-                    ? "Locking in current price…"
-                    : txStatus === "awaiting_signature"
-                      ? tokenLive
-                        ? "Confirm burn…"
-                        : "Confirm signature…"
-                      : txStatus === "processing"
+              <button type="button" className="win98-button" onClick={handleHijack} disabled={busy || isHijackProtected}>
+                {isHijackProtected
+                  ? `Protected (${protectedForMin}m)`
+                  : busy && activeIntent?.actionType === "hijack"
+                    ? txStatus === "creating_intent"
+                      ? "Locking in current price…"
+                      : txStatus === "awaiting_signature"
                         ? tokenLive
-                          ? "Burning…"
-                          : "Hijacking…"
-                        : tokenLive
-                          ? `Hijack (${hijackCost})`
-                          : "Hijack (simulated, free)"
-                  : tokenLive
-                    ? `Hijack (${hijackCost})`
-                    : "Hijack (simulated, free)"}
+                          ? "Confirm burn…"
+                          : "Confirm signature…"
+                        : txStatus === "processing"
+                          ? tokenLive
+                            ? "Burning…"
+                            : "Hijacking…"
+                          : tokenLive
+                            ? `Hijack (${hijackCost})`
+                            : "Hijack (simulated, free)"
+                    : tokenLive
+                      ? `Hijack (${hijackCost})`
+                      : "Hijack (simulated, free)"}
               </button>
             )}
             {mode === "manage" && (

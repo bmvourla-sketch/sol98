@@ -12,7 +12,7 @@ import type { AdContent } from "./pixel-types";
 export const BOARD_FILE_SIZE = 10; // 10×10
 export const BOARD_FILE_BLOCKS = BOARD_FILE_SIZE * BOARD_FILE_SIZE; // 100
 export const BOARD_FILE_START_PRICE_SOL = 2;
-export const BOARD_FILE_PRICE_INCREASE = 0.1; // +10% per sale
+export const BOARD_FILE_PRICE_INCREASE = 0.05; // +5% per sale
 
 /** Base SOL valuation of a sub-block before any hijack decay. */
 export const BOARD_BLOCK_BASE_SOL = 0.2;
@@ -44,6 +44,9 @@ export interface BoardPixel extends AdContent {
   owner: string; // wallet public key (base58)
   valuationSol: number;
   purchasedAt: number;
+  // Anti-harassment: see PixelData.protectedUntil in lib/pixel-types.ts —
+  // same cooldown, mirrored for board.exe sub-blocks.
+  protectedUntil?: number;
   isRented: boolean;
   rentedTo?: string;
   rentedUntil?: number;

@@ -1,19 +1,21 @@
-const WHITEPAPER = `SOL-98 — README.TXT (WHITEPAPER)  v1.3
+const WHITEPAPER = `SOL-98 — README.TXT (WHITEPAPER)  v1.5
 ================================================================================
 
 EXECUTIVE SUMMARY
 
-    SOL-98 is The Million Dollar Homepage reimagined as a permanent,
-    on-chain billboard on Solana. 1,000,000 pixels (a 1000×1000 canvas)
-    are sold in 10×10 blocks (10,000 blocks) on a bonding curve that
-    starts at 0.2 SOL per block. The board is a decentralized ad space
-    with a built-in attention game: every purchase — the first sale or
-    a later "Buy at Valuation" (section 7) — raises a block's valuation
-    10%, and anyone can burn $PIXEL98 to HIJACK a block, which devalues
-    it 5% and hands it to a new owner. Buy and hijack form a closed
-    cycle that repeats for every block, for as long as the board exists.
-    Ads are clickable — a viewer who taps an ad is redirected to its
-    destination link.
+    SOL-98 is The Million Dollar Homepage reimagined for Solana: a
+    1000×1000 pixel canvas (1,000,000 pixels) sold in 10×10 blocks
+    (10,000 blocks) on a bonding curve that starts at 0.2 SOL per
+    block. Every purchase is a real, wallet-signed SOL payment,
+    verified before ownership changes hands — see section 10 for
+    exactly what that guarantees and what it doesn't. The board is a
+    decentralized ad space with a built-in attention game: every
+    purchase — the first sale or a later "Buy at Valuation" (section
+    7) — raises a block's valuation 10%, and anyone can burn $PIXEL98
+    to HIJACK a block, which devalues it 5% and hands it to a new
+    owner. Buy and hijack form a closed cycle that repeats for every
+    block, for as long as the board exists. Ads are clickable — a
+    viewer who taps an ad is redirected to its destination link.
 
 ================================================================================
 
@@ -74,21 +76,24 @@ EXECUTIVE SUMMARY
 
 2. DYNAMIC PRICING  (BONDING CURVE)
 
-    price(N) = 0.2 * 1.10^(N-1)          (N is 1-indexed)
+    price(N) = 0.2 * 1.05^(N-1)          (N is 1-indexed)
 
-    Every PURCHASE raises the next price by 10%. Within a single bulk
-    purchase the price ALSO steps up +10% every 10 blocks, so a huge
+    Every PURCHASE raises the next price by 5%. Within a single bulk
+    purchase the price ALSO steps up +5% every 10 blocks, so a huge
     area can't be bought entirely at the flat starting price: blocks
-    1-10 cost the current price, blocks 11-20 cost +10%, blocks 21-30
-    cost +20%, and so on. The price steps up once more after the whole
+    1-10 cost the current price, blocks 11-20 cost +5%, blocks 21-30
+    cost +10%, and so on. The price steps up once more after the whole
     purchase completes.
 
     Examples:
       block #1     0.2000 SOL
-      block #2     0.2200 SOL
-      block #10    0.4716 SOL
-      block #50    21.3438 SOL
-      block #100   2,505.5659 SOL   (the curve steepens fast)
+      block #2     0.2100 SOL
+      block #10    0.3103 SOL
+      block #50    2.1843 SOL
+      block #100   25.0486 SOL
+
+    (Was a +10%/sale curve that put block #100 at 2,505 SOL — lowered
+    to +5% so late blocks stay expensive without being absurd.)
 
     Homage: the 2005 original sold each pixel for $1 (minimum $100 per
     10×10 block). SOL-98 keeps the same 10×10 block structure with a
@@ -120,16 +125,21 @@ EXECUTIVE SUMMARY
 
 4. DECENTRALIZED AD SPACE
 
-    A purchased block is a permanent, clickable on-chain billboard:
-      - the owner's wallet address (proof of ownership)
+    A purchased block is a clickable billboard, paid for with a real
+    Solana transaction and recorded against your wallet:
+      - the owner's wallet address (proof of purchase — verifiable on
+        Solana, see section 10)
       - a destination link (click-through redirect)
       - an image / neon GIF
       - a tooltip message
       - a neon template (Cyberpunk Pulse / Matrix Text / Flashing
-        Neon Border / Sub-Domain Glitch / Rainbow)
+        Neon Border / Sub-Domain Glitch / Rainbow / Sequential Flash)
 
-    Blocks can be resold or rented in Market.exe. There is no central
-    censor and no takedown.
+    Blocks can be resold or rented in Market.exe, bought outright at
+    valuation (section 7), or hijacked (section 6) — ownership is
+    contested, not permanent. There is no central censor and no
+    silent takedown: nobody can hide or erase a live block's ad
+    without out-buying or out-burning its owner.
 
 ================================================================================
 
@@ -171,6 +181,13 @@ EXECUTIVE SUMMARY
 
     Each successful hijack REDUCES the target's valuation by 5% (0.95x).
     Hijack resets the ad and transfers ownership. (Activated at launch.)
+
+    COOLDOWN: a block cannot be hijacked again for 24 hours after it last
+    changed hands (a first sale, a "Buy at Valuation" purchase, or a
+    hijack). Every new owner is guaranteed at least a day of real ad
+    time before the spot is contestable again — without this, a
+    well-funded attacker could re-hijack the same high-value spot the
+    moment it's bought back.
 
 ================================================================================
 
@@ -224,6 +241,39 @@ EXECUTIVE SUMMARY
         airdrop(owner) = (blocks_owned / blocks_sold) * total_supply
 
     (reference estimate: 100,000 $PIXEL98 per block)
+
+================================================================================
+
+10. TRANSPARENCY  (WHAT'S ACTUALLY ON-CHAIN)
+
+    Every SOL payment on SOL-98 is a real, wallet-signed Solana
+    transaction: a first sale or "Buy at Valuation" purchase sends SOL
+    directly from the buyer (to the treasury for a first sale, to the
+    current owner for Buy at Valuation), and — once $PIXEL98 is live
+    post-launch — a hijack's burn is split on-chain, half destroyed
+    and half sent to the previous owner. Every one of these transfers
+    is independently checkable on any Solana explorer; nobody has to
+    take SOL-98's word for a payment happening.
+
+    What is NOT an on-chain program or NFT: which wallet currently
+    owns a block, its ad content (link, image, tooltip, neon
+    template), and its live valuation are tracked in SOL-98's own
+    database, checked against the real on-chain payment at the moment
+    of each purchase or hijack. This keeps editing an ad or reacting
+    to a hijack instant and gas-free — but it means the board's
+    CURRENT state is served by SOL-98, not read directly off an
+    on-chain account. A public on-chain indexer (Roadmap, Phase 3) is
+    planned so the board becomes independently verifiable without
+    trusting the server for anything beyond "what does this wallet
+    currently show as owning."
+
+    Treasury wallet (receives first-sale proceeds):
+
+        82gZCS4Tkwt2PXCrkLBYS9PY98es1xAivmhCj6Q1QjnL
+
+    Every SOL that has ever moved in or out of this address is public
+    on Solana — check it on Solscan or any Solana explorer before
+    buying if you want to verify activity yourself.
 
 ================================================================================
 

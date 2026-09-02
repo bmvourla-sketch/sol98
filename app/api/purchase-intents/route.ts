@@ -222,6 +222,14 @@ export async function POST(request: Request) {
     if (!PIXEL98_MINT) {
       return fail(503, "$PIXEL98 not live yet — hijack can't be paid until launch");
     }
+    // Anti-harassment cooldown (see lib/token.ts HIJACK_COOLDOWN_MS) —
+    // checked here too so a hijack attempt on a protected spot fails
+    // immediately instead of after the buyer has already signed a burn
+    // transaction; the redemption route re-checks this fresh regardless.
+    if (current.protectedUntil && Date.now() < current.protectedUntil) {
+      const mins = Math.max(1, Math.ceil((current.protectedUntil - Date.now()) / 60_000));
+      return fail(409, `this spot is protected from hijacks for another ${mins} min — it was recently bought or hijacked`);
+    }
     const burnedFraction = await getBurnedFraction();
     const referenceSol = boardId === null ? INITIAL_PRICE_SOL : BOARD_BLOCK_BASE_SOL;
     const hijackCost = hijackCostInTokens(burnedFraction, current.valuationSol, referenceSol);

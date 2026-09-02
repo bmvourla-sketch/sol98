@@ -18,6 +18,7 @@ import {
   type BoardFile,
   type BoardPixel,
 } from "@/lib/board-types";
+import { HIJACK_COOLDOWN_MS } from "@/lib/token";
 import { isSupabaseConfigured, requireDurableStore } from "./supabase-env";
 import { createMutex } from "./mutex";
 import * as supabaseStore from "./board-db-supabase";
@@ -84,6 +85,7 @@ export function makeSubBlocks(boardId: string, owner: string, purchasedAt: numbe
     neon: "none" as const,
     valuationSol: BOARD_BLOCK_BASE_SOL,
     purchasedAt,
+    protectedUntil: purchasedAt + HIJACK_COOLDOWN_MS,
     isRented: false,
   }));
 }

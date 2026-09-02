@@ -21,7 +21,7 @@ import { getIntent, type IntentActionType, type PurchaseIntent } from "@/lib/ser
 import { updatePixelOwnerAtomic } from "@/lib/server/pixel-mutations-atomic";
 import { insertPixelsAtomic } from "@/lib/server/pixel-insert-atomic";
 import { areaPrice, BOARD_SIZE, INITIAL_PRICE_SOL, nextSpotPrice, TOTAL_SPOTS } from "@/lib/pricing";
-import { HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
+import { HIJACK_COOLDOWN_MS, HIJACK_VALUATION_DECAY, hijackCostInTokens, splitHijackBurn } from "@/lib/token";
 import { PIXEL98_MINT, TREASURY_ADDRESS } from "@/lib/solana";
 import {
   bannerPosition,
@@ -46,6 +46,16 @@ const withWriteLock = createMutex();
 
 function fail(status: number, error: string) {
   return NextResponse.json({ error }, { status });
+}
+
+// Anti-harassment cooldown (see HIJACK_COOLDOWN_MS): a spot that was just
+// bought or hijacked can't be hijacked again until this passes, so an owner
+// always gets a guaranteed window of real "ad time" instead of being
+// re-hijacked the instant they take a spot back.
+function hijackProtectionError(protectedUntil: number | undefined): Response | null {
+  if (!protectedUntil || Date.now() >= protectedUntil) return null;
+  const mins = Math.max(1, Math.ceil((protectedUntil - Date.now()) / 60_000));
+  return fail(409, `this spot is protected from hijacks for another ${mins} min — it was recently bought or hijacked`);
 }
 
 function parsePubkey(value: unknown): PublicKey | null {
@@ -255,6 +265,7 @@ async function handleBuy(body: Record<string, unknown>, actor: string, ip: strin
       neon: ad.neon,
       valuationSol: priceSol,
       purchasedAt: Date.now(),
+      protectedUntil: Date.now() + HIJACK_COOLDOWN_MS,
       isRented: false,
     };
 
@@ -354,6 +365,7 @@ async function handleBuyArea(body: Record<string, unknown>, actor: string, ip: s
       neon: ad.neon,
       valuationSol: nextSpotPrice(currentSoldCount), // per-block reference valuation for future hijack pricing
       purchasedAt: now,
+      protectedUntil: now + HIJACK_COOLDOWN_MS,
       isRented: false,
       bannerGroupId: groupId,
       bannerCols: layout.cols,
@@ -432,6 +444,8 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
       if (target.owner !== intent.sellerWallet) {
         return fail(409, "that spot changed hands since your intent was created — please create a new intent");
       }
+      const protectionError = hijackProtectionError(target.protectedUntil);
+      if (protectionError) return protectionError;
 
       // Cost is ALWAYS recomputed fresh from the live burned fraction AND
       // the target's live valuation — never taken from the intent (see
@@ -524,6 +538,8 @@ async function handleHijack(body: Record<string, unknown>, actor: string, ip: st
   const target = await getPixel(index);
   if (!target) return fail(404, "nothing to hijack there yet");
   if (target.owner === actor) return fail(400, "you already own this spot");
+  const protectionError = hijackProtectionError(target.protectedUntil);
+  if (protectionError) return protectionError;
 
   const burnedFraction = await getBurnedFraction();
   const hijackCost = hijackCostInTokens(burnedFraction, target.valuationSol, INITIAL_PRICE_SOL);
@@ -560,6 +576,7 @@ function applyHijack(current: PixelData, newOwner: string): PixelData {
     message: "",
     neon: "none",
     purchasedAt: Date.now(),
+    protectedUntil: Date.now() + HIJACK_COOLDOWN_MS,
     isRented: false,
     rentedTo: undefined,
     rentedUntil: undefined,
@@ -774,6 +791,7 @@ async function handleBuyListing(body: Record<string, unknown>, actor: string, ip
           rentPriceSol: undefined,
           rentPricePixel98: undefined,
           valuationSol: existing.listingPriceSol ?? existing.valuationSol,
+          protectedUntil: Date.now() + HIJACK_COOLDOWN_MS,
         }),
         signature,
         wallet: actor,
@@ -869,6 +887,7 @@ async function handleBuyValuation(body: Record<string, unknown>, actor: string, 
           rentPriceSol: undefined,
           rentPricePixel98: undefined,
           valuationSol: existing.valuationSol * 1.1,
+          protectedUntil: Date.now() + HIJACK_COOLDOWN_MS,
         }),
         signature,
         wallet: actor,

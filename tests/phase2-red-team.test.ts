@@ -24,6 +24,7 @@ import { buildAuthMessage } from "../lib/auth-message";
 import { bytesToBase64 } from "../lib/bytes";
 import { nextSpotPrice, areaPrice } from "../lib/pricing";
 import { solRequiredLamportsWithTolerance } from "../lib/server/verify-tx";
+import { HIJACK_COOLDOWN_MS } from "../lib/token";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 
@@ -125,6 +126,17 @@ async function makeIntent(opts: {
 }
 
 const blankAd = { destination: "", imageUrl: "", message: "", neon: "none" };
+
+// Anti-harassment hijack cooldown (see HIJACK_COOLDOWN_MS in lib/token.ts):
+// a spot bought through the route is protected from hijacks for 24h. Tests
+// below that buy a target through the route and then hijack that SAME
+// target aren't testing the cooldown itself — so they jump Date.now()
+// forward past the cooldown window first. Callers MUST restore the spy
+// (nowSpy.mockRestore()) once done, since it isn't reset between tests
+// automatically.
+function pastHijackCooldown() {
+  return vi.spyOn(Date, "now").mockReturnValue(Date.now() + HIJACK_COOLDOWN_MS + 60_000);
+}
 
 beforeEach(async () => {
   await rmForce(DATA_DIR);
@@ -427,9 +439,13 @@ describe("§6 replay protection — a claimed signature can't be reused for a DI
     const owner = Keypair.generate();
     const hijacker = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 90, signature: "sig-owner-90", ad: blankAd }));
+    // Jump past the cooldown BEFORE creating the intent, so its TTL
+    // (relative to the mocked "now") still covers the hijack call below.
+    const nowSpy = pastHijackCooldown();
     const hijackIntentId = await makeIntent({ actionType: "hijack", index: 90, buyer: hijacker, seller: owner, currency: "PIXEL98", mint });
 
     const hijackRes = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "sig-burn-reuse", intentId: hijackIntentId }));
+    nowSpy.mockRestore();
     expect(hijackRes.status).toBe(200);
 
     const replay = await route.POST(post({ action: "buy", actor: hijacker.publicKey.toBase58(), index: 91, signature: "sig-burn-reuse", ad: blankAd }));
@@ -471,6 +487,10 @@ describe("§13 invariants", () => {
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 210, signature: "sig-owner-210", ad: blankAd }));
     const listAuth = signAuth(owner, "list-sale", 210);
     await route.POST(post({ action: "list-sale", actor: owner.publicKey.toBase58(), index: 210, price: 1, currency: "SOL", ...listAuth }));
+    // Jump past the cooldown BEFORE creating the hijack intent, so its TTL
+    // (relative to the mocked "now") still covers the hijack call below —
+    // this test is about payment verification, not the cooldown.
+    const nowSpy = pastHijackCooldown();
     const hijackIntentId = await makeIntent({ actionType: "hijack", index: 210, buyer: actor, seller: owner, currency: "PIXEL98", mint });
     const listingIntentId = await makeIntent({ actionType: "buy-listing", index: 210, buyer: actor, seller: owner, priceSol: 1 });
 
@@ -482,6 +502,7 @@ describe("§13 invariants", () => {
     const areaRes = await route.POST(post({ action: "buy-area", actor: actor.publicKey.toBase58(), indices: [212, 213], signature: "s2", ad: blankAd }));
     expect(areaRes.status).toBe(402);
     const hijackRes = await route.POST(post({ action: "hijack", actor: actor.publicKey.toBase58(), signature: "s3", intentId: hijackIntentId }));
+    nowSpy.mockRestore();
     expect(hijackRes.status).toBe(402);
     const listingRes = await route.POST(post({ action: "buy-listing", actor: actor.publicKey.toBase58(), signature: "s4", intentId: listingIntentId }));
     expect(listingRes.status).toBe(402);
@@ -651,6 +672,11 @@ describe("PHASE 2.1 — P2-F2 fix: DB exception after claim no longer burns the 
     const owner = Keypair.generate();
     const hijacker = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 300, signature: "sig-owner-300", ad: blankAd }));
+    // Jump past the cooldown BEFORE creating the intent, so its TTL
+    // (relative to the mocked "now") still covers both hijack attempts
+    // below — this test is about the DB-outage/retry contract, not the
+    // cooldown itself.
+    const nowSpy = pastHijackCooldown();
     const intentId = await makeIntent({ actionType: "hijack", index: 300, buyer: hijacker, seller: owner, currency: "PIXEL98", mint });
 
     vi.doMock("@/lib/server/pixel-db", async (importOriginal) => {
@@ -673,6 +699,7 @@ describe("PHASE 2.1 — P2-F2 fix: DB exception after claim no longer burns the 
     const retry = await recoveredRoute.POST(
       post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "sig-hijack-outage", intentId })
     );
+    nowSpy.mockRestore();
     expect(retry.status).toBe(200);
     expect((await retry.json()).pixel.owner).toBe(hijacker.publicKey.toBase58());
   });

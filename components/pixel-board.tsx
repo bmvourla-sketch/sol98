@@ -387,9 +387,14 @@ export function PixelBoard({
           Buy Pixel
         </button>
         <div className="flex flex-wrap items-center gap-3">
+          {soldCount === 0 && (
+            <span className="text-xs font-bold text-yellow-200">
+              Board is empty — be the first owner ever, at the lowest price it will ever be.
+            </span>
+          )}
           <span className="text-xs text-white">
             Next block: <b>{formatSol(nextPriceSol)} SOL</b>
-            <span className="text-white/60"> (10×10 · +10%/sale)</span>
+            <span className="text-white/60"> (10×10 · +5%/sale)</span>
           </span>
           {selCount > 1 && (
             <span className="text-xs text-yellow-200">Selected: {selCount} blocks</span>

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildAuthMessage } from "../lib/auth-message";
 import { bytesToBase64 } from "../lib/bytes";
+import { HIJACK_COOLDOWN_MS } from "../lib/token";
 
 // End-to-end tests against the ACTUAL route handlers in app/api/pixels/route.ts
 // (not just the pure helpers they call). This is what proves the "blockchain
@@ -127,6 +128,19 @@ async function makeIntent(opts: {
 }
 
 const blankAd = { destination: "", imageUrl: "", message: "", neon: "none" };
+
+// Anti-harassment hijack cooldown (see HIJACK_COOLDOWN_MS in lib/token.ts):
+// a spot bought through the route is protected from hijacks for 24h. Tests
+// below that buy a target through the route and then hijack that SAME
+// target are testing hijack MECHANICS (auth proofs, burn verification,
+// signature handling), not the cooldown itself — so they jump Date.now()
+// forward past the cooldown window first. Callers MUST restore the spy
+// (nowSpy.mockRestore()) once they're done, since it isn't reset between
+// tests automatically. The cooldown's own rejection behavior is covered
+// separately below.
+function pastHijackCooldown() {
+  return vi.spyOn(Date, "now").mockReturnValue(Date.now() + HIJACK_COOLDOWN_MS + 60_000);
+}
 
 beforeEach(async () => {
   await rmForce(DATA_DIR);
@@ -261,7 +275,9 @@ describe("POST /api/pixels — hijack (pre-launch simulated vs post-launch real 
     const hijacker = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 7, signature: "sig-own", ad: blankAd }));
 
+    const nowSpy = pastHijackCooldown();
     const noAuth = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), index: 7 }));
+    nowSpy.mockRestore();
     expect(noAuth.status).toBe(401);
   });
 
@@ -272,9 +288,14 @@ describe("POST /api/pixels — hijack (pre-launch simulated vs post-launch real 
     const impostor = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 8, signature: "sig-own2", ad: blankAd }));
 
+    // Jump past the cooldown BEFORE signing, so the auth proof's own
+    // freshness timestamp lines up with the (mocked) "now" the route will
+    // check it against.
+    const nowSpy = pastHijackCooldown();
     // `impostor` signs, but the request claims to be `hijacker`.
     const forgedAuth = signAuth(impostor, "hijack", 8);
     const res = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), index: 8, ...forgedAuth }));
+    nowSpy.mockRestore();
     expect(res.status).toBe(401);
   });
 
@@ -284,8 +305,11 @@ describe("POST /api/pixels — hijack (pre-launch simulated vs post-launch real 
     const hijacker = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 9, signature: "sig-own3", ad: blankAd }));
 
+    // Jump past the cooldown BEFORE signing — see the forged-auth test above.
+    const nowSpy = pastHijackCooldown();
     const auth = signAuth(hijacker, "hijack", 9);
     const res = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), index: 9, ...auth }));
+    nowSpy.mockRestore();
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.simulated).toBe(true);
@@ -300,12 +324,16 @@ describe("POST /api/pixels — hijack (pre-launch simulated vs post-launch real 
     const owner = Keypair.generate();
     const hijacker = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 10, signature: "sig-own4", ad: blankAd }));
+    // Jump past the cooldown BEFORE creating the intent, so the intent's own
+    // TTL (relative to the mocked "now") still covers the hijack call below.
+    const nowSpy = pastHijackCooldown();
     const intentId = await makeIntent({ actionType: "hijack", index: 10, buyer: hijacker, seller: owner, currency: "PIXEL98", mint });
 
     verifyBurnMock.mockResolvedValue({ ok: false, error: "no matching burn" });
     const res = await route.POST(
       post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "burn-sig", intentId })
     );
+    nowSpy.mockRestore();
     expect(res.status).toBe(402);
     expect((await res.json()).error).toMatch(/burn not verified/);
   });
@@ -316,11 +344,15 @@ describe("POST /api/pixels — hijack (pre-launch simulated vs post-launch real 
     const owner = Keypair.generate();
     const hijacker = Keypair.generate();
     await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 11, signature: "sig-own5", ad: blankAd }));
+    // Jump past the cooldown BEFORE creating the intent — see the previous
+    // post-launch test's identical comment.
+    const nowSpy = pastHijackCooldown();
     const intentId = await makeIntent({ actionType: "hijack", index: 11, buyer: hijacker, seller: owner, currency: "PIXEL98", mint });
 
     const res = await route.POST(
       post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "burn-sig-ok", intentId })
     );
+    nowSpy.mockRestore();
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.simulated).toBe(false);
@@ -329,6 +361,18 @@ describe("POST /api/pixels — hijack (pre-launch simulated vs post-launch real 
     expect(verifyTokenTransferMock).toHaveBeenCalledWith(
       expect.objectContaining({ fromOwner: hijacker.publicKey.toBase58(), toOwner: owner.publicKey.toBase58() })
     );
+  });
+
+  it("a spot bought moments ago is still within its hijack cooldown — a hijack attempt is rejected with 409", async () => {
+    const route = await freshRoute(); // no PIXEL98_MINT → pre-launch (simulated) path
+    const owner = Keypair.generate();
+    const hijacker = Keypair.generate();
+    await route.POST(post({ action: "buy", actor: owner.publicKey.toBase58(), index: 12, signature: "sig-own6", ad: blankAd }));
+
+    const auth = signAuth(hijacker, "hijack", 12);
+    const res = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), index: 12, ...auth }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/protected/);
   });
 });
 

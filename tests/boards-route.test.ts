@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildAuthMessage } from "../lib/auth-message";
 import { bytesToBase64 } from "../lib/bytes";
+import { HIJACK_COOLDOWN_MS } from "../lib/token";
 
 // End-to-end tests for app/api/boards/route.ts — the "Start Ads" second
 // marketplace (board.exe files, each a 10x10 sub-board sold separately from
@@ -123,6 +124,17 @@ async function makeIntent(opts: {
   return intent.id;
 }
 
+// Anti-harassment hijack cooldown (see HIJACK_COOLDOWN_MS in lib/token.ts):
+// a sub-block bought through the route is protected from hijacks for 24h.
+// The hijack tests below buy their board through the route and then hijack
+// one of its SAME sub-blocks — they're testing hijack mechanics, not the
+// cooldown itself, so they jump Date.now() forward past the cooldown
+// window first. Callers MUST restore the spy (nowSpy.mockRestore()) once
+// done, since it isn't reset between tests automatically.
+function pastHijackCooldown() {
+  return vi.spyOn(Date, "now").mockReturnValue(Date.now() + HIJACK_COOLDOWN_MS + 60_000);
+}
+
 beforeEach(async () => {
   await rmForce(DATA_DIR);
 });
@@ -206,8 +218,13 @@ describe("POST /api/boards — hijack (pre-launch simulated vs post-launch real 
     const hijacker = Keypair.generate();
     const file = await buyBoard(route, alice, "sig-board-5");
 
+    // Jump past the cooldown BEFORE signing, so the auth proof's own
+    // freshness timestamp lines up with the (mocked) "now" the route checks
+    // it against.
+    const nowSpy = pastHijackCooldown();
     const auth = signAuth(hijacker, "board-hijack", 2);
     const res = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), boardId: file.id, index: 2, ...auth }));
+    nowSpy.mockRestore();
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.simulated).toBe(true);
@@ -220,6 +237,9 @@ describe("POST /api/boards — hijack (pre-launch simulated vs post-launch real 
     const alice = Keypair.generate();
     const hijacker = Keypair.generate();
     const file = await buyBoard(route, alice, "sig-board-6");
+    // Jump past the cooldown BEFORE creating the intents, so their TTLs
+    // (relative to the mocked "now") still cover the hijack calls below.
+    const nowSpy = pastHijackCooldown();
     const intentId1 = await makeIntent({ actionType: "hijack", boardId: file.id, index: 3, buyer: hijacker, seller: alice, currency: "PIXEL98", mint });
 
     verifyBurnMock.mockResolvedValue({ ok: false, error: "no burn" });
@@ -229,6 +249,7 @@ describe("POST /api/boards — hijack (pre-launch simulated vs post-launch real 
     verifyBurnMock.mockResolvedValue({ ok: true });
     const intentId2 = await makeIntent({ actionType: "hijack", boardId: file.id, index: 3, buyer: hijacker, seller: alice, currency: "PIXEL98", mint });
     const ok = await route.POST(post({ action: "hijack", actor: hijacker.publicKey.toBase58(), signature: "burn-sig-2", intentId: intentId2 }));
+    nowSpy.mockRestore();
     expect(ok.status).toBe(200);
     expect((await ok.json()).pixel.owner).toBe(hijacker.publicKey.toBase58());
   });

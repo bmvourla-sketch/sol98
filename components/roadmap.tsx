@@ -3,11 +3,12 @@ const ROADMAP = `SOL-98 — ROADMAP.EXE
 
 PHASE 1 — BOOT SEQUENCE   [SHIPPED]
     [x] Board live (100×100 blocks · 1,000,000 px)
-    [x] 0.2 SOL sales (10×10 blocks, +10% bonding curve)
+    [x] 0.2 SOL sales (10×10 blocks, +5% bonding curve)
     [x] Wallet connect (Phantom / Solflare) — top-right
     [x] Market.exe — buy / rent / sell blocks
     [x] Banner.exe — banner studio (upload + optimize + download + place)
-    [x] Neon templates (Cyberpunk / Matrix / Flashing / Glitch / Rainbow)
+    [x] Neon templates (Cyberpunk / Matrix / Flashing / Glitch /
+        Rainbow / Sequential Flash)
     [x] Clickable ads (click → redirect to destination link)
     [x] SOL + $PIXEL98 payments (dual currency, buy/rent/sell)
     [x] PWA install + offline service worker
@@ -23,7 +24,7 @@ PHASE 3 — CYBER WAR
     [ ] Hijack fully on-chain
     [ ] Mobile "Win98" emulator (touch-friendly)
     [ ] On-chain indexer for live board state
-    [ ] Durable board store (Supabase/Postgres)
+    [x] Durable board store (Supabase/Postgres) — SHIPPED EARLY
 
 PHASE 4 — PIXEL DAO
     [ ] Pixel Holders DAO

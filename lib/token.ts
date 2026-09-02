@@ -27,6 +27,16 @@ export const HIJACK_VALUATION_RATIO_CAP = 20;
 export const LAUNCH_TARGET_SPOTS = 100;
 
 /**
+ * Anti-harassment cooldown: a spot cannot be hijacked again for this long
+ * after it last changed hands (a first sale, a "Buy at Valuation" purchase,
+ * or a successful hijack). Without this, a well-funded attacker could
+ * repeatedly re-hijack the same high-value spot the moment it's bought back,
+ * denying its owner any real "ad time." 24h gives every new owner a
+ * guaranteed window before the spot is contestable again.
+ */
+export const HIJACK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Total $PIXEL98 supply — matches Pump.fun's standard self-serve launch
  * mint (every Pump.fun token mints a fixed 1,000,000,000 supply; there is
  * no way to launch a smaller custom supply through the standard flow) and
